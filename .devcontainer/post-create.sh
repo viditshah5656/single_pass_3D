@@ -62,5 +62,5 @@ printf 'Python: '; python --version
 printf 'Python path: '; command -v python
 printf 'FFmpeg: '; command -v ffmpeg
 printf 'Torch: '; python -c 'import torch; print(torch.__version__)'
-printf 'Run: python -m app.main doctor --json\\n'
-printf 'Run: python -m app.main serve --host 0.0.0.0 --port 8000\\n'
+printf 'Run: python -m app.main doctor --json\n'
+printf 'Run: python -m app.main serve --host 0.0.0.0 --port 8000\n'
