@@ -12,6 +12,17 @@ JOBS="${CMAKE_BUILD_PARALLEL_LEVEL:-$(nproc)}"
 
 mkdir -p third_party .local/bin
 
+# Make the native build self-healing in Debian/Ubuntu Codespaces. OpenMVS's
+# Common library explicitly requires a CMake nanoflann package, while the root
+# build requires Eigen >= 3.4, OpenCV and Boost.
+if command -v apt-get >/dev/null 2>&1 && command -v sudo >/dev/null 2>&1; then
+  sudo apt-get update
+  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    build-essential cmake ninja-build pkg-config \
+    libeigen3-dev libopencv-dev libnanoflann-dev libboost-all-dev \
+    libgl1 libegl1 libglib2.0-0 libgomp1 libomp-dev ffmpeg
+fi
+
 if [[ ! -d "$OPENMVS_DIR/.git" ]]; then
   rm -rf "$OPENMVS_DIR"
   git clone --recurse-submodules https://github.com/cdcseacave/openMVS.git "$OPENMVS_DIR"
