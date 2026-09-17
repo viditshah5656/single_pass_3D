@@ -3,16 +3,33 @@ set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
 
-VENV=/opt/venv
-if [[ ! -x "$VENV/bin/python" ]]; then
-  python -m venv --system-site-packages "$VENV"
-fi
+# Be self-healing: the Dockerfile installs these in a fresh image, but we also
+# verify/install them here so a reused Codespace cannot end up half-configured.
+sudo apt-get update
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+  ffmpeg \
+  build-essential \
+  cmake \
+  ninja-build \
+  pkg-config \
+  libgl1 \
+  libglib2.0-0 \
+  libgomp1 \
+  libomp-dev
 
-source "$VENV/bin/activate"
+# /opt/venv is preferred because devcontainer.json puts it first on PATH.
+# Create it as root, then hand ownership to the Codespace user.
+if [[ ! -x /opt/venv/bin/python ]]; then
+  sudo rm -rf /opt/venv
+  sudo python -m venv --system-site-packages /opt/venv
+fi
+sudo chown -R "$(id -u):$(id -g)" /opt/venv
+source /opt/venv/bin/activate
+
 python -m pip install --upgrade pip setuptools wheel
 
-# Codespaces are the portable Linux/CPU validation environment. Native CUDA and
-# Apple MPS are validated on their respective machines.
+# Codespaces are Linux CPU development environments. Install the CPU PyTorch
+# wheels explicitly; native CUDA/MPS validation happens on the target machines.
 python -m pip install --extra-index-url https://download.pytorch.org/whl/cpu \
   torch torchvision
 
@@ -34,10 +51,11 @@ mkdir -p data/input data/uploads data/output data/workspace data/job_state .loca
 
 git config --local core.autocrlf input
 
-printf '\nAeroSynth Codespace ready.\n'
+echo
+echo 'AeroSynth Codespace ready.'
 printf 'Python: '; python --version
+printf 'Python path: '; command -v python
+printf 'FFmpeg: '; command -v ffmpeg
 printf 'Torch: '; python -c 'import torch; print(torch.__version__)'
-printf 'FFmpeg: '; ffmpeg -version | head -n 1
-printf 'Interpreter: '; command -v python
-printf '\nRun: python -m app.main doctor --json\n'
+printf 'Run: python -m app.main doctor --json\n'
 printf 'Run: python -m app.main serve --host 0.0.0.0 --port 8000\n'
