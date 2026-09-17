@@ -1,5 +1,7 @@
 # AeroSynth 3D — Single-Pass Drone Video Reconstruction
 
+[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/viditshah5656/single_pass_3D?quickstart=1)
+
 AeroSynth 3D is a **real photogrammetry pipeline** for turning an aerial drone video into a metric 3D reconstruction. The system is designed around a single continuous flight pass and uses real Structure-from-Motion and Multi-View Stereo backends rather than synthetic depth or fabricated accuracy values.
 
 > **Important:** a single video pass cannot guarantee survey accuracy by software alone. Reconstruction quality depends on camera motion, overlap, texture, exposure, scene geometry, telemetry/GCP quality, and the native SfM/MVS toolchain.
@@ -70,6 +72,65 @@ Drone Video + optional SRT/GPX/CSV
    manifest.json
 ```
 
+## GitHub Codespaces — start from zero
+
+The repository has a reproducible `.devcontainer` and dedicated Codespaces scripts. Use this when you want a clean Linux development environment without configuring your Mac or Windows machine first.
+
+### Launch
+
+Click the Codespaces badge at the top of this README or use:
+
+```text
+https://codespaces.new/viditshah5656/single_pass_3D?quickstart=1
+```
+
+Choose **main**. Codespaces reads `.devcontainer/devcontainer.json` and runs the post-create installer automatically.
+
+### First verification
+
+```bash
+python --version
+python -c "import torch; print('torch', torch.__version__); print('cuda', torch.cuda.is_available())"
+python -m compileall -q app tests
+pytest -q
+python -m app.main doctor --json
+```
+
+The Codespace is deliberately a **CPU development/validation target**. Use a native M4 machine to validate Apple MPS and a native NVIDIA machine to validate CUDA acceleration.
+
+### Full Codespace smoke test
+
+Start the API and run the bounded integration check:
+
+```bash
+python -m app.main serve --host 0.0.0.0 --port 8000
+```
+
+In a second terminal:
+
+```bash
+bash scripts/codespace-smoke.sh
+```
+
+Or, when the server is already running:
+
+```bash
+python scripts/smoke_api.py
+```
+
+Codespaces forwards port `8000`, so the same FastAPI process serves the local control room at `/` and the API at `/api/v1/*`.
+
+### Optional native OpenMVS build
+
+A fresh Codespace does not compile OpenMVS automatically. For a Linux CPU dense-MVS environment:
+
+```bash
+bash scripts/build_openmvs_linux.sh
+python -m app.main doctor --json
+```
+
+See [docs/CODESPACES.md](docs/CODESPACES.md) for the complete sequence and the distinction between Codespaces, M4/MPS, and NVIDIA/CUDA validation.
+
 ## Requirements
 
 - Python 3.10 or 3.11
@@ -125,13 +186,20 @@ Then open:
 http://localhost:8000
 ```
 
-The API exposes persistent job state and stage progress, so a browser refresh does not erase the reconstruction job.
+The public GitHub Pages control room is:
+
+```text
+https://viditshah5656.github.io/single_pass_3D/
+```
+
+GitHub Pages hosts the browser UI only. The heavy Python/COLMAP/OpenMVS reconstruction remains on the machine running the FastAPI backend. The web UI's **API base** field can be pointed at that backend, including a GitHub Codespaces forwarded port.
 
 ## CLI
 
 ```bash
 python -m app.main run data/uploads/flight.mp4 \
   --mapper-backend glomap \
+  --compute-backend auto \
   --target-fps 3 \
   --max-frames 450 \
   --output-dir data/output/run_01
@@ -142,6 +210,7 @@ Use pycolmap directly when GLOMAP is not available:
 ```bash
 python -m app.main run data/uploads/flight.mp4 \
   --mapper-backend pycolmap \
+  --compute-backend auto \
   --output-dir data/output/run_01
 ```
 
@@ -207,16 +276,29 @@ Run the unit/integrity tests with:
 python -m pytest -q
 ```
 
+Codespaces-specific checks:
+
+```bash
+bash scripts/codespace-check.sh
+bash scripts/codespace-smoke.sh
+```
+
 Tests are designed to validate the no-fabrication contract, telemetry handling, model-directory discovery and export/backend behavior without requiring every native binary on every CI runner.
 
 ## Project layout
 
 ```text
+.devcontainer/
+  devcontainer.json
+  post-create.sh
+
 app/
   main.py
   config.py
   pipeline.py              # core 10-stage reconstruction engine
   pipeline_runtime.py      # artifact validation + manifest gate
+  platform.py              # cross-platform host/compute diagnostics
+  doctor.py                # dependency/native preflight
   api/routes.py
   video/
   preprocessing/
@@ -224,6 +306,14 @@ app/
   geospatial/
   analysis/
 frontend/
+docs/
+  CODESPACES.md
+  UNIVERSAL_PLATFORM.md
+scripts/
+  build_openmvs_linux.sh
+  codespace-check.sh
+  codespace-smoke.sh
+  smoke_api.py
 data/
 tests/
 requirements.txt
