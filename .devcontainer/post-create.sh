@@ -17,7 +17,10 @@ sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
   libglib2.0-0 \
   libgomp1 \
   libomp-dev \
-  libboost-all-dev
+  libboost-all-dev \
+  libeigen3-dev \
+  libopencv-dev \
+  libnanoflann-dev
 
 # /opt/venv is preferred because devcontainer.json puts it first on PATH.
 # Create it as root, then hand ownership to the Codespace user.
@@ -44,7 +47,7 @@ filtered = [
     and not line.strip().startswith('torch==')
     and not line.strip().startswith('torchvision==')
 ]
-Path('/tmp/requirements-codespaces.txt').write_text('\n'.join(filtered) + '\n', encoding='utf-8')
+Path('/tmp/requirements-codespaces.txt').write_text('\\n'.join(filtered) + '\\n', encoding='utf-8')
 PY
 
 python -m pip install -r /tmp/requirements-codespaces.txt
@@ -59,5 +62,5 @@ printf 'Python: '; python --version
 printf 'Python path: '; command -v python
 printf 'FFmpeg: '; command -v ffmpeg
 printf 'Torch: '; python -c 'import torch; print(torch.__version__)'
-printf 'Run: python -m app.main doctor --json\n'
-printf 'Run: python -m app.main serve --host 0.0.0.0 --port 8000\n'
+printf 'Run: python -m app.main doctor --json\\n'
+printf 'Run: python -m app.main serve --host 0.0.0.0 --port 8000\\n'
