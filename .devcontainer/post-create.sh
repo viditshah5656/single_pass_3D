@@ -13,9 +13,11 @@ sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
   ninja-build \
   pkg-config \
   libgl1 \
+  libegl1 \
   libglib2.0-0 \
   libgomp1 \
-  libomp-dev
+  libomp-dev \
+  libboost-all-dev
 
 # /opt/venv is preferred because devcontainer.json puts it first on PATH.
 # Create it as root, then hand ownership to the Codespace user.
