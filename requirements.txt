@@ -1,4 +1,4 @@
-# Core
+# Core runtime
 torch
 torchvision
 numpy
@@ -6,29 +6,34 @@ scipy
 opencv-python
 Pillow
 tqdm
-pydantic
+pydantic>=2
 
-# Detection & Dynamic Segmentation
+# Detection / segmentation
 ultralytics
 
-# Feature Matching & SfM
+# SfM / feature matching
 pycolmap
-lightglue @ git+https://github.com/cvg/LightGlue.git
 kornia
+lightglue @ git+https://github.com/cvg/LightGlue.git
 
-# 3D Reconstruction & Meshing
+# 3D geometry / exports
 open3d
 trimesh
 pymeshlab
+pygltflib>=1.16
 
-# Geospatial & Metrology
+# Geospatial / metrology
 laspy
 pyproj
 rasterio
 fpdf2
 
-# API & Server
-fastapi
+# API
+fastapi>=0.110
 uvicorn[standard]
 python-multipart
 PyYAML
+
+# Tests / development
+pytest
+httpx
