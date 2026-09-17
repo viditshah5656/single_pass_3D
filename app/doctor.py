@@ -5,13 +5,13 @@ import argparse
 import importlib.util
 import json
 import os
+import platform
+import shutil
 import subprocess
-import sys
 from pathlib import Path
 
 from app.platform import diagnostics, detect_host
 from app.config import find_binary, find_glomap_binary, logger
-from app.reconstruction.openmvs import find_openmvs_binary
 
 REQUIRED_PYTHON = ("numpy", "cv2", "PIL", "open3d", "pycolmap", "fastapi", "pydantic")
 OPTIONAL_PYTHON = ("torch", "torchvision", "ultralytics", "trimesh", "pygltflib", "laspy", "pyproj", "rasterio")
@@ -22,19 +22,44 @@ def _module_status(names: tuple[str, ...]) -> dict[str, bool]:
     return {name: importlib.util.find_spec(name) is not None for name in names}
 
 
+def _native_binary(name: str) -> str | None:
+    found = shutil.which(name)
+    if found:
+        return found
+    root = Path(__file__).resolve().parents[1]
+    names = [name]
+    if os.name == "nt" and not name.lower().endswith(".exe"):
+        names.append(name + ".exe")
+    roots = (
+        root / ".local" / "bin",
+        root / "bin",
+        root / "openMVS_build" / "bin",
+        root / "third_party" / "bin",
+    )
+    for directory in roots:
+        for candidate_name in names:
+            candidate = directory / candidate_name
+            if candidate.is_file() and (os.name == "nt" or os.access(candidate, os.X_OK)):
+                return str(candidate)
+    return None
+
+
 def _probe_binary(path: str | None) -> dict[str, object]:
     if not path:
         return {"found": False, "path": None, "executable": False}
-    try:
-        result = subprocess.run([path, "--help"], capture_output=True, text=True, timeout=8, check=False)
-        return {
-            "found": True,
-            "path": path,
-            "executable": result.returncode == 0 or bool(result.stdout) or bool(result.stderr),
-            "returncode": result.returncode,
-        }
-    except Exception as exc:
-        return {"found": True, "path": path, "executable": False, "error": str(exc)}
+    last_error = ""
+    for args in (("--help",), ("-h",), ()):
+        try:
+            result = subprocess.run([path, *args], capture_output=True, text=True, timeout=8, check=False)
+            return {
+                "found": True,
+                "path": path,
+                "executable": result.returncode == 0 or bool(result.stdout) or bool(result.stderr),
+                "returncode": result.returncode,
+            }
+        except Exception as exc:
+            last_error = str(exc)
+    return {"found": True, "path": path, "executable": False, "error": last_error}
 
 
 def run_doctor(video: str | None = None, strict: bool = False) -> tuple[int, dict[str, object]]:
@@ -47,34 +72,29 @@ def run_doctor(video: str | None = None, strict: bool = False) -> tuple[int, dic
     report["native_backends"] = {
         "glomap": _probe_binary(find_glomap_binary()),
         "colmap": _probe_binary(find_binary("colmap")),
-        "openmvs": {
-            name: _probe_binary(find_openmvs_binary(name))
-            for name in REQUIRED_OPENMVS
-        },
+        "openmvs": {name: _probe_binary(_native_binary(name)) for name in REQUIRED_OPENMVS},
     }
 
     if video:
-        from app.video.extractor import VideoExtractor
-
-        path = Path(video).expanduser().resolve()
-        if not path.is_file():
-            report["video"] = {"valid": False, "error": f"Video not found: {path}"}
-        else:
-            try:
-                extractor = VideoExtractor()
-                metadata = extractor.get_metadata(path)
-                extractor.validate_capture_profile(metadata)
-                report["video"] = {
-                    "valid": True,
-                    "path": str(path),
-                    "fps": metadata.fps,
-                    "width": metadata.width,
-                    "height": metadata.height,
-                    "frames": metadata.total_frames,
-                    "duration_sec": metadata.duration_sec,
-                }
-            except Exception as exc:
-                report["video"] = {"valid": False, "path": str(path), "error": str(exc)}
+        try:
+            from app.video.extractor import VideoExtractor
+            path = Path(video).expanduser().resolve()
+            if not path.is_file():
+                raise FileNotFoundError(f"Video not found: {path}")
+            extractor = VideoExtractor()
+            metadata = extractor.get_metadata(path)
+            extractor.validate_capture_profile(metadata)
+            report["video"] = {
+                "valid": True,
+                "path": str(path),
+                "fps": metadata.fps,
+                "width": metadata.width,
+                "height": metadata.height,
+                "frames": metadata.total_frames,
+                "duration_sec": metadata.duration_sec,
+            }
+        except Exception as exc:
+            report["video"] = {"valid": False, "error": str(exc)}
 
     required_ok = all(report["python_packages"]["required"].values())
     openmvs_ok = all(item["found"] and item["executable"] for item in report["native_backends"]["openmvs"].values())
@@ -90,6 +110,7 @@ def run_doctor(video: str | None = None, strict: bool = False) -> tuple[int, dic
         "dense_mvs_ready": full_ready,
         "portable_cpu_path": required_ok and pycolmap_ok,
         "strict": strict,
+        "platform_family": platform.system(),
     }
 
     if strict and not full_ready:
@@ -100,7 +121,7 @@ def run_doctor(video: str | None = None, strict: bool = False) -> tuple[int, dic
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="AeroSynth 3D cross-platform environment doctor")
-    parser.add_argument("video", nargs="?", help="Optional drone video to validate in addition to the host")
+    parser.add_argument("video", nargs="?", help="Optional drone video to validate as well")
     parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON")
     parser.add_argument("--strict", action="store_true", help="Exit non-zero unless the full dense pipeline is ready")
     args = parser.parse_args()
@@ -112,7 +133,7 @@ def main() -> int:
         summary = report["summary"]
         print(f"Host: {report['host']['os']} / {report['host']['machine']} / Python {report['host']['python']}")
         print(f"Full reconstruction ready: {'YES' if summary['full_reconstruction_ready'] else 'NO'}")
-        print(f"Portable CPU path: {'YES' if summary['portable_cpu_path'] else 'NO'}")
+        print(f"Portable CPU/SfM path: {'YES' if summary['portable_cpu_path'] else 'NO'}")
         torch_info = report.get("torch", {})
         print(f"PyTorch: {torch_info.get('version', 'not installed')} | CUDA={torch_info.get('cuda_available', False)} | MPS={torch_info.get('mps_available', False)}")
         print("OpenMVS:")
@@ -126,7 +147,7 @@ def main() -> int:
             if report['video']['valid']:
                 print(f"  {report['video']['width']}x{report['video']['height']} @ {report['video']['fps']:.2f} FPS, {report['video']['duration_sec']:.2f}s")
             else:
-                print(f"  {report['video']['error']}")
+                print(f"  {report['video'].get('error', 'unknown error')}")
     return code
 
 
