@@ -18,9 +18,11 @@ RUN apt-get update \
         ninja-build \
         pkg-config \
         libgl1 \
+        libegl1 \
         libglib2.0-0 \
         libgomp1 \
         libomp-dev \
+        libboost-all-dev \
     && rm -rf /var/lib/apt/lists/*
 
 RUN mkdir -p /opt/venv \
