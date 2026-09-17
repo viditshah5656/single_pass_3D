@@ -11,7 +11,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.api.routes import router
 from app.config import PipelineConfig, logger
-from app.pipeline import ReconstructionPipeline
+from app.pipeline_runtime import ReconstructionPipeline
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -57,8 +57,7 @@ def run_cli(args: argparse.Namespace) -> int:
     config.video.max_frames = args.max_frames
     config.sfm.mapper_backend = args.mapper_backend
     config.validate()
-    result = ReconstructionPipeline(config).run()
-    return 0 if result.get("status") == "success" else 1
+    return 0 if ReconstructionPipeline(config).run().get("status") == "success" else 1
 
 
 def build_parser() -> argparse.ArgumentParser:
