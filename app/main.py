@@ -11,7 +11,6 @@ from fastapi.staticfiles import StaticFiles
 
 from app.api.routes import router
 from app.config import PipelineConfig, logger
-from app.pipeline_runtime import ReconstructionPipeline
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -30,6 +29,22 @@ def create_app() -> FastAPI:
         async def index() -> FileResponse:
             return FileResponse(str(frontend_dir / "index.html"))
 
+        page_files = {
+            "reconstruct": "reconstruct.html",
+            "jobs": "jobs.html",
+            "outputs": "outputs.html",
+            "system": "system.html",
+            "studio": "studio.html",
+        }
+        def make_page_handler(filename: str):
+            async def page() -> FileResponse:
+                return FileResponse(str(frontend_dir / filename))
+
+            return page
+
+        for route, filename in page_files.items():
+            app.add_api_route(f"/{route}", make_page_handler(filename), include_in_schema=False)
+
     data_dir = ROOT / "data"
     if data_dir.is_dir():
         app.mount("/data", StaticFiles(directory=str(data_dir)), name="data")
@@ -41,16 +56,15 @@ app = create_app()
 
 def run_server(host: str, port: int, reload: bool = False) -> None:
     logger.info("Starting AeroSynth 3D server on %s:%s", host, port)
-    uvicorn.run(
-        "app.main:app" if reload else app,
-        host=host,
-        port=port,
-        reload=reload,
-        reload_excludes=["data/*", ".local/*", "openMVS_build/*", "*.ply", "*.obj", "*.bin"],
-    )
+    options = {"host": host, "port": port, "reload": reload}
+    if reload:
+        options["reload_excludes"] = ["data/*", ".local/*", "openMVS_build/*", "*.ply", "*.obj", "*.bin"]
+    uvicorn.run("app.main:app" if reload else app, **options)
 
 
 def run_cli(args: argparse.Namespace) -> int:
+    from app.pipeline_runtime import ReconstructionPipeline
+
     if args.command == "doctor":
         from app.doctor import run_doctor
         code, report = run_doctor(args.video, args.strict)
@@ -74,6 +88,7 @@ def run_cli(args: argparse.Namespace) -> int:
         workspace_dir=args.workspace_dir,
         output_dir=args.output_dir,
         compute_backend=args.compute_backend,
+        cpu_threads=args.cpu_threads,
         skip_dynamic_masking=args.skip_dynamic_masking,
         skip_depth_estimation=args.skip_depth_estimation,
         skip_georeferencing=args.skip_georeferencing,
@@ -107,6 +122,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--telemetry-path", default=None)
     run.add_argument("--mapper-backend", choices=["glomap", "pycolmap"], default="glomap")
     run.add_argument("--compute-backend", choices=["auto", "cuda", "mps", "cpu"], default="auto")
+    run.add_argument("--cpu-threads", type=int, default=4)
     run.add_argument("--target-fps", type=float, default=3.0)
     run.add_argument("--max-frames", type=int, default=450)
     run.add_argument("--workspace-dir", default="data/workspace")

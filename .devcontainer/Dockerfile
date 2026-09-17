@@ -28,6 +28,7 @@ RUN apt-get update \
         libeigen3-dev \
         libopencv-dev \
         libnanoflann-dev \
+        libcgal-dev \
     && rm -rf /var/lib/apt/lists/*
 
 RUN mkdir -p /opt/venv \

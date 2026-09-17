@@ -14,8 +14,7 @@ from fastapi import APIRouter, BackgroundTasks, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
-from app.config import DEVICE, PipelineConfig, find_colmap_binary, find_glomap_binary, logger
-from app.pipeline_runtime import ReconstructionPipeline
+from app.config import DEVICE, PipelineConfig, find_binary, find_colmap_binary, find_glomap_binary, logger
 
 ROOT = Path(__file__).resolve().parents[2]
 UPLOAD_ROOT = ROOT / "data" / "uploads"
@@ -63,6 +62,7 @@ def _load_jobs() -> dict[str, dict[str, Any]]:
 jobs = _load_jobs()
 _running_jobs: set[str] = set()
 _running_lock = threading.Lock()
+_pipeline_slots = threading.Semaphore(max(1, int(os.getenv("AEROSYNTH_MAX_CONCURRENT_JOBS", "1"))))
 
 
 class JobStatus(BaseModel):
@@ -83,8 +83,10 @@ class ReconstructRequest(BaseModel):
     skip_depth_estimation: bool = False
     skip_georeferencing: bool = False
     skip_analysis: bool = False
-    target_fps: float = Field(default=3.0, gt=0)
+    target_fps: float = Field(default=1.5, gt=0, le=10)
     mapper_backend: str = Field(default="glomap", pattern="^(glomap|pycolmap)$")
+    processing_profile: str = Field(default="fast", pattern="^(fast|balanced|quality)$")
+    cpu_threads: int = Field(default=4, ge=1, le=64)
     telemetry_filename: Optional[str] = None
 
 _VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v"}
@@ -100,29 +102,38 @@ def _set_job(job_id: str, **updates: Any) -> None:
 
 
 def _run_pipeline_task(job_id: str, config: PipelineConfig) -> None:
+    # Keep the large Open3D/CV pipeline out of the web server's startup path.
+    # It is only needed after a user has explicitly started a reconstruction.
     with _running_lock:
         if job_id in _running_jobs:
             return
         _running_jobs.add(job_id)
     try:
-        _set_job(job_id, status="running", stage="initializing", stage_index=0, progress=0.0, message="Initializing reconstruction engine", started_at=_now(), mapper_backend=config.sfm.mapper_backend)
-        pipeline = ReconstructionPipeline(config)
-        for stage_name, _ in STAGES:
-            method = getattr(pipeline, f"_stage_{stage_name}", None)
-            if method is None:
-                continue
-            index = STAGE_INDEX[stage_name]
-            def wrapped(*args: Any, _method=method, _name=stage_name, _index=index, **kwargs: Any):
-                _set_job(job_id, status="running", stage=_name, stage_index=_index, progress=round((_index - 1) * 100 / len(STAGES), 1), message=dict(STAGES)[_name])
-                result = _method(*args, **kwargs)
-                _set_job(job_id, status="running", stage=_name, stage_index=_index, progress=round(_index * 100 / len(STAGES), 1), message=f"Completed: {dict(STAGES)[_name]}")
-                return result
-            setattr(pipeline, f"_stage_{stage_name}", wrapped)
-        result = pipeline.run()
-        if result.get("status") == "success":
-            _set_job(job_id, status="completed", stage="completed", stage_index=len(STAGES), progress=100.0, message="Reconstruction completed", finished_at=_now(), output_dir=str(config.get_output().resolve()))
-        else:
-            _set_job(job_id, status="failed", stage="failed", message=result.get("message", "Pipeline failed"), finished_at=_now())
+        _set_job(job_id, status="queued", stage="queued", stage_index=0, progress=0.0, message="Waiting for the CPU reconstruction slot")
+        with _pipeline_slots:
+            thread_count = str(config.cpu_threads)
+            for variable in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "NUMEXPR_NUM_THREADS"):
+                os.environ[variable] = thread_count
+            os.environ["OMP_DYNAMIC"] = "FALSE"
+            from app.pipeline_runtime import ReconstructionPipeline
+            _set_job(job_id, status="running", stage="initializing", stage_index=0, progress=0.0, message=f"Initializing reconstruction engine with {thread_count} CPU threads", started_at=_now(), mapper_backend=config.sfm.mapper_backend)
+            pipeline = ReconstructionPipeline(config)
+            for stage_name, _ in STAGES:
+                method = getattr(pipeline, f"_stage_{stage_name}", None)
+                if method is None:
+                    continue
+                index = STAGE_INDEX[stage_name]
+                def wrapped(*args: Any, _method=method, _name=stage_name, _index=index, **kwargs: Any):
+                    _set_job(job_id, status="running", stage=_name, stage_index=_index, progress=round((_index - 1) * 100 / len(STAGES), 1), message=dict(STAGES)[_name])
+                    result = _method(*args, **kwargs)
+                    _set_job(job_id, status="running", stage=_name, stage_index=_index, progress=round(_index * 100 / len(STAGES), 1), message=f"Completed: {dict(STAGES)[_name]}")
+                    return result
+                setattr(pipeline, f"_stage_{stage_name}", wrapped)
+            result = pipeline.run()
+            if result.get("status") == "success":
+                _set_job(job_id, status="completed", stage="completed", stage_index=len(STAGES), progress=100.0, message="Reconstruction completed", finished_at=_now(), output_dir=str(config.get_output().resolve()))
+            else:
+                _set_job(job_id, status="failed", stage="failed", message=result.get("message", "Pipeline failed"), finished_at=_now())
     except Exception as exc:
         logger.exception("Reconstruction failed for %s", job_id)
         _set_job(job_id, status="failed", stage="failed", message=str(exc), finished_at=_now())
@@ -139,23 +150,27 @@ async def health():
 @router.get("/preflight")
 async def preflight():
     import importlib.util
-    from app.reconstruction.openmvs import find_openmvs_binary
     packages = {p: bool(importlib.util.find_spec(p)) for p in ("cv2", "numpy", "PIL", "open3d", "pycolmap", "ultralytics", "pyproj", "rasterio", "laspy", "trimesh", "pygltflib")}
-    openmvs = {name: bool(find_openmvs_binary(name)) for name in ("InterfaceCOLMAP", "DensifyPointCloud", "ReconstructMesh", "TextureMesh")}
+    openmvs = {name: bool(find_binary(name)) for name in ("InterfaceCOLMAP", "DensifyPointCloud", "ReconstructMesh", "TextureMesh")}
     ready = all(packages[p] for p in ("cv2", "numpy", "PIL", "open3d", "pycolmap")) and all(openmvs.values())
     return {"status": "ready" if ready else "incomplete", "device": str(DEVICE), "glomap": find_glomap_binary(), "colmap": find_colmap_binary(), "python_packages": packages, "openmvs": openmvs, "workspace_writable": os.access(str(ROOT / "data"), os.W_OK)}
 
 
 @router.get("/system-info")
 async def system_info():
-    import platform, sys
+    import platform, subprocess, sys
     gpu_name = None
     vram_gb = None
     try:
-        import torch
-        if torch.cuda.is_available():
-            gpu_name = torch.cuda.get_device_name(0)
-            vram_gb = round(torch.cuda.get_device_properties(0).total_memory / (1024**3), 2)
+        nvidia_smi = find_binary("nvidia-smi")
+        if nvidia_smi:
+            probe = subprocess.run(
+                [nvidia_smi, "--query-gpu=name,memory.total", "--format=csv,noheader,nounits"],
+                capture_output=True, text=True, timeout=1.5, check=False,
+            )
+            if probe.returncode == 0 and probe.stdout.strip():
+                gpu_name, memory_mb = (part.strip() for part in probe.stdout.splitlines()[0].split(",", 1))
+                vram_gb = round(float(memory_mb) / 1024, 2)
     except Exception:
         pass
     return {"device": str(DEVICE), "device_name": gpu_name or platform.processor() or "Host CPU", "vram_gb": vram_gb, "python": sys.version.split()[0], "platform": platform.platform(), "pipeline_version": "5.0.0"}
@@ -224,10 +239,37 @@ async def start_reconstruction(job_id: str, background_tasks: BackgroundTasks, o
     config = PipelineConfig(input_video=str(video.resolve()), telemetry_path=telemetry, workspace_dir=str((ROOT / "data" / "workspace" / job_id).resolve()), output_dir=str((OUTPUT_ROOT / job_id).resolve()), skip_dynamic_masking=opts.skip_dynamic_masking, skip_depth_estimation=opts.skip_depth_estimation, skip_georeferencing=opts.skip_georeferencing, skip_analysis=opts.skip_analysis)
     config.video.target_fps = opts.target_fps
     config.sfm.mapper_backend = opts.mapper_backend
+    config.cpu_threads = opts.cpu_threads
+    config.reconstruction.openmvs_max_threads = opts.cpu_threads
+    profiles = {
+        "fast": {
+            "max_frames": 60, "max_keyframes": 28, "resolution_level": 3,
+            "max_resolution": 1080, "number_views": 2, "poisson_depth": 8,
+            "texture_resolution": 1024,
+        },
+        "balanced": {
+            "max_frames": 220, "max_keyframes": 100, "resolution_level": 1,
+            "max_resolution": 2000, "number_views": 4, "poisson_depth": 9,
+            "texture_resolution": 2048,
+        },
+        "quality": {
+            "max_frames": 450, "max_keyframes": 180, "resolution_level": 0,
+            "max_resolution": 2800, "number_views": 5, "poisson_depth": 10,
+            "texture_resolution": 4096,
+        },
+    }
+    profile = profiles[opts.processing_profile]
+    config.video.max_frames = profile["max_frames"]
+    config.keyframe.max_frames = profile["max_keyframes"]
+    config.reconstruction.openmvs_resolution_level = profile["resolution_level"]
+    config.reconstruction.openmvs_max_resolution = profile["max_resolution"]
+    config.reconstruction.openmvs_number_views = profile["number_views"]
+    config.mesh.poisson_depth = profile["poisson_depth"]
+    config.mesh.texture_resolution = profile["texture_resolution"]
     config.validate()
-    _set_job(job_id, status="queued", stage="queued", progress=0.0, mapper_backend=opts.mapper_backend)
+    _set_job(job_id, status="queued", stage="queued", progress=0.0, mapper_backend=opts.mapper_backend, processing_profile=opts.processing_profile, cpu_threads=opts.cpu_threads)
     background_tasks.add_task(_run_pipeline_task, job_id, config)
-    return {"job_id": job_id, "status": "started", "mapper_backend": opts.mapper_backend}
+    return {"job_id": job_id, "status": "started", "mapper_backend": opts.mapper_backend, "processing_profile": opts.processing_profile}
 
 
 @router.get("/status/{job_id}", response_model=JobStatus)
@@ -236,6 +278,25 @@ async def get_status(job_id: str):
         raise HTTPException(404, "Job not found")
     data = jobs[job_id]
     return JobStatus(job_id=job_id, status=data.get("status", "unknown"), stage=data.get("stage", "queued"), stage_index=data.get("stage_index", 0), progress=data.get("progress", 0.0), message=data.get("message", ""), started_at=data.get("started_at"), finished_at=data.get("finished_at"), mapper_backend=data.get("mapper_backend"))
+
+
+@router.get("/jobs")
+async def list_jobs():
+    """Return safe job summaries for the web application's history view."""
+    public_fields = (
+        "job_id", "filename", "status", "stage", "stage_index", "stage_total",
+        "progress", "message", "mapper_backend", "processing_profile", "cpu_threads", "file_size", "created_at",
+        "updated_at", "started_at", "finished_at",
+    )
+    summaries = [
+        {field: item.get(field) for field in public_fields if field in item}
+        for item in jobs.values()
+    ]
+    summaries.sort(
+        key=lambda item: item.get("updated_at") or item.get("created_at") or "",
+        reverse=True,
+    )
+    return {"jobs": summaries, "count": len(summaries)}
 
 
 @router.get("/job-details/{job_id}")

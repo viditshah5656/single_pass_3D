@@ -4,11 +4,15 @@ set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
 OPENMVS_DIR="${OPENMVS_DIR:-third_party/openMVS}"
+OPENMVS_VERSION="${OPENMVS_VERSION:-v2.3.0}"
+VCG_DIR="${VCG_DIR:-third_party/vcglib}"
 # IMPORTANT: OpenMVS itself contains tracked build/Utils.cmake. Never put the
 # CMake build tree inside the source tree or it can overwrite/delete that file.
 BUILD_DIR="${OPENMVS_BUILD_DIR:-third_party/openMVS-build}"
 INSTALL_DIR="${OPENMVS_INSTALL_DIR:-$PWD/.local/openmvs}"
-JOBS="${CMAKE_BUILD_PARALLEL_LEVEL:-$(nproc)}"
+# Mesh.cpp can exhaust memory when multiple compiler processes run in a small
+# Codespace. Callers on larger machines can still override this explicitly.
+JOBS="${CMAKE_BUILD_PARALLEL_LEVEL:-1}"
 
 mkdir -p third_party .local/bin
 
@@ -19,14 +23,23 @@ if command -v apt-get >/dev/null 2>&1 && command -v sudo >/dev/null 2>&1; then
   sudo apt-get update
   sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     build-essential cmake ninja-build pkg-config \
-    libeigen3-dev libopencv-dev libnanoflann-dev libboost-all-dev \
+    libeigen3-dev libopencv-dev libnanoflann-dev libboost-all-dev libcgal-dev \
     libgl1 libegl1 libglib2.0-0 libgomp1 libomp-dev ffmpeg
+fi
+
+if [[ ! -d "$VCG_DIR/.git" ]]; then
+  git clone --depth 1 https://github.com/cdcseacave/VCG.git "$VCG_DIR"
 fi
 
 if [[ ! -d "$OPENMVS_DIR/.git" ]]; then
   rm -rf "$OPENMVS_DIR"
-  git clone --recurse-submodules https://github.com/cdcseacave/openMVS.git "$OPENMVS_DIR"
+  git clone --branch "$OPENMVS_VERSION" --depth 1 --recurse-submodules \
+    https://github.com/cdcseacave/openMVS.git "$OPENMVS_DIR"
 else
+  # Pin the native backend: the development branch changes its dependency
+  # contract frequently and can break an otherwise reproducible build.
+  git -C "$OPENMVS_DIR" fetch --depth 1 origin "refs/tags/$OPENMVS_VERSION:refs/tags/$OPENMVS_VERSION"
+  git -C "$OPENMVS_DIR" checkout --detach "$OPENMVS_VERSION"
   git -C "$OPENMVS_DIR" submodule update --init --recursive
 fi
 
@@ -44,6 +57,7 @@ rm -rf "$BUILD_DIR"
 cmake -S "$OPENMVS_DIR" -B "$BUILD_DIR" -GNinja \
   -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_INSTALL_PREFIX="$INSTALL_DIR" \
+  -DVCG_ROOT="$(realpath "$VCG_DIR")" \
   -DOpenMVS_USE_CUDA=OFF \
   -DOpenMVS_BUILD_VIEWER=OFF \
   -DOpenMVS_BUILD_TOOLS=ON \
@@ -52,7 +66,8 @@ cmake -S "$OPENMVS_DIR" -B "$BUILD_DIR" -GNinja \
   -DOpenMVS_USE_SSE=ON \
   -DCMAKE_DISABLE_FIND_PACKAGE_CUDA=TRUE
 
-cmake --build "$BUILD_DIR" --parallel "$JOBS"
+cmake --build "$BUILD_DIR" --parallel "$JOBS" --target \
+  InterfaceCOLMAP DensifyPointCloud ReconstructMesh TextureMesh
 cmake --install "$BUILD_DIR"
 
 for binary in InterfaceCOLMAP DensifyPointCloud ReconstructMesh TextureMesh; do

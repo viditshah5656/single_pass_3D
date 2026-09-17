@@ -9,12 +9,6 @@ import os
 import platform
 import shutil
 
-try:
-    import torch
-except Exception:
-    torch = None
-
-
 def setup_logging(level: int = logging.INFO) -> logging.Logger:
     logger = logging.getLogger("aerosynth3d")
     if not logger.handlers:
@@ -31,6 +25,10 @@ logger = setup_logging()
 
 def get_device(requested: str | None = None):
     """Return a real torch.device using CUDA -> MPS -> CPU selection."""
+    try:
+        import torch
+    except Exception:
+        torch = None
     requested = (requested or os.getenv("AEROSYNTH_COMPUTE_BACKEND", "auto")).lower()
     if platform.system() == "Darwin":
         os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
@@ -78,7 +76,10 @@ def get_device(requested: str | None = None):
     return device
 
 
-DEVICE = get_device()
+# A lightweight default for modules imported by the web layer. The real torch
+# device is resolved when a reconstruction starts, avoiding seconds of startup
+# latency just to render the website.
+DEVICE = os.getenv("AEROSYNTH_COMPUTE_BACKEND", "cpu").lower()
 
 
 def find_binary(name: str, extra_roots: tuple[Path, ...] = ()) -> Optional[str]:
@@ -194,6 +195,7 @@ class PipelineConfig:
     output_dir: str = "data/output"
     workspace_dir: str = "data/workspace"
     compute_backend: str = "auto"
+    cpu_threads: int = 4
     video: VideoConfig = field(default_factory=VideoConfig)
     quality: QualityConfig = field(default_factory=QualityConfig)
     keyframe: KeyframeConfig = field(default_factory=KeyframeConfig)
@@ -224,6 +226,8 @@ class PipelineConfig:
             raise ValueError("mesh.texture_resolution is unrealistically small")
         if self.compute_backend not in {"auto", "cuda", "mps", "cpu"}:
             raise ValueError("compute_backend must be one of: auto, cuda, mps, cpu")
+        if not 1 <= self.cpu_threads <= 64:
+            raise ValueError("cpu_threads must be between 1 and 64")
         if self.sfm.mapper_backend not in {"glomap", "pycolmap"}:
             raise ValueError("sfm.mapper_backend must be glomap or pycolmap")
 

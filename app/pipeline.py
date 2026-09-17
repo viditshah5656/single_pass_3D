@@ -30,6 +30,7 @@ class ReconstructionPipeline:
     
     def __init__(self, config: PipelineConfig):
         self.config = config
+        self.device = config.resolved_device()
         self.workspace = self.config.get_workspace()
         self.output_dir = self.config.get_output()
         self.workspace.mkdir(parents=True, exist_ok=True)
@@ -162,7 +163,7 @@ class ReconstructionPipeline:
         """Stage 4: Generate dynamic object masks for all keyframes using YOLOv8-seg."""
         logger.info("Stage 4/10: Masking dynamic objects (cars, pedestrians) across keyframes")
         try:
-            masker = DynamicObjectMasker(self.config.dynamic_mask)
+            masker = DynamicObjectMasker(self.config.dynamic_mask, device=self.device)
             mask_dir = self.workspace / "masks"
             mask_dir.mkdir(parents=True, exist_ok=True)
             self.dynamic_masks = masker.process_frames(self.keyframes, mask_dir)
@@ -179,7 +180,12 @@ class ReconstructionPipeline:
         if len(self.keyframes) < 3:
             raise RuntimeError(f"SfM requires at least 3 keyframes. Received: {len(self.keyframes)}")
 
-        sfm = SfMPipeline(self.workspace)
+        sfm = SfMPipeline(
+            self.workspace,
+            num_threads=self.config.cpu_threads,
+            max_keypoints=self.config.sfm.max_keypoints,
+            match_window=self.config.sfm.match_window,
+        )
         self.keyframes = sfm.prepare_workspace(self.keyframes, self.dynamic_masks)
         sfm.extract_features(camera_model=self.config.sfm.camera_model)
         sfm.match_features(method="sequential")
@@ -210,7 +216,12 @@ class ReconstructionPipeline:
         self.sfm_pipeline = sfm
         
         if rec is None:
-            raise RuntimeError(f"{mapper_backend} Structure from Motion failed: could not reconstruct sparse camera model.")
+            raise RuntimeError(
+                f"{mapper_backend} could not find a reconstructable camera path. "
+                "Use real landscape drone footage with steady translation, textured terrain, "
+                "and 70–85% visual overlap. Screen recordings, static/slideshow footage, "
+                "fast turns, blank surfaces, and low-overlap clips cannot produce a 3D model."
+            )
 
         sfm_res = sfm.get_reconstruction_data(self.keyframes, self.gps_data)
         self.camera_trajectory = sfm_res["camera_poses"]
@@ -241,7 +252,12 @@ class ReconstructionPipeline:
             dynamic_mask_paths=self.dynamic_masks,
             voxel_size=self.config.reconstruction.voxel_size,
             outlier_nb_neighbors=self.config.reconstruction.outlier_nb_neighbors,
-            outlier_std_ratio=self.config.reconstruction.outlier_std_ratio
+            outlier_std_ratio=self.config.reconstruction.outlier_std_ratio,
+            resolution_level=self.config.reconstruction.openmvs_resolution_level,
+            max_resolution=self.config.reconstruction.openmvs_max_resolution,
+            number_views=self.config.reconstruction.openmvs_number_views,
+            number_views_fuse=self.config.reconstruction.openmvs_number_views_fuse,
+            max_threads=self.config.reconstruction.openmvs_max_threads,
         )
         self.dense_pcd = dense_res["pcd"]
         self.dense_ply_path = dense_res["dense_ply_path"]
@@ -362,7 +378,7 @@ class ReconstructionPipeline:
     def _stage_analysis(self):
         """Stage 9: Semantic 3D annotation and physical metrology calculations."""
         logger.info("Stage 9/10: Running 3D semantic annotation and metric calculations")
-        annotator = SemanticAnnotator()
+        annotator = SemanticAnnotator(device=self.device)
         classification, structures = annotator.annotate_point_cloud(
             self.dense_pcd, 
             self.camera_trajectory, 

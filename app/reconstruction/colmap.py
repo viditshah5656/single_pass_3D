@@ -8,7 +8,7 @@ import numpy as np
 import open3d  # noqa: F401
 import pycolmap
 
-from app.config import DEVICE, logger
+from app.config import logger
 
 
 class SfMPipeline:
@@ -17,7 +17,7 @@ class SfMPipeline:
     SIFT feature extraction, dynamic mask exclusion, sequential matching,
     and incremental bundle adjustment.
     """
-    def __init__(self, workspace_dir: Union[str, Path]):
+    def __init__(self, workspace_dir: Union[str, Path], num_threads: int = 4, max_keypoints: int = 4096, match_window: int = 8):
         self.workspace_dir = Path(workspace_dir)
         self.database_path = self.workspace_dir / "database.db"
         self.image_dir = self.workspace_dir / "images"
@@ -27,6 +27,9 @@ class SfMPipeline:
         self.image_dir.mkdir(parents=True, exist_ok=True)
         self.sparse_dir.mkdir(parents=True, exist_ok=True)
         self.best_model: Optional[pycolmap.Reconstruction] = None
+        self.num_threads = max(1, int(num_threads))
+        self.max_keypoints = max(512, int(max_keypoints))
+        self.match_window = max(2, int(match_window))
 
     def prepare_workspace(self, keyframe_paths: List[Path], mask_paths: Optional[List[Path]] = None) -> List[Path]:
         """
@@ -78,7 +81,8 @@ class SfMPipeline:
             image_options.mask_path = str(self.mask_dir)
 
         extraction_options = pycolmap.FeatureExtractionOptions()
-        extraction_options.sift.max_num_features = 4096
+        extraction_options.num_threads = self.num_threads
+        extraction_options.sift.max_num_features = self.max_keypoints
         
         pycolmap.extract_features(
             database_path=self.database_path,
@@ -93,12 +97,14 @@ class SfMPipeline:
         Match extracted features sequentially with geometric verification.
         """
         logger.info(f"Matching features using {method} matching...")
+        matching_options = pycolmap.FeatureMatchingOptions()
+        matching_options.num_threads = self.num_threads
         if method == "exhaustive":
-            pycolmap.match_exhaustive(self.database_path)
+            pycolmap.match_exhaustive(self.database_path, matching_options=matching_options)
         else:
             pairing_options = pycolmap.SequentialPairingOptions()
-            pairing_options.overlap = 8
-            pycolmap.match_sequential(self.database_path, pairing_options=pairing_options)
+            pairing_options.overlap = self.match_window
+            pycolmap.match_sequential(self.database_path, matching_options=matching_options, pairing_options=pairing_options)
             
     def detect_sparse_model_dir(self) -> Path:
         """
@@ -222,10 +228,14 @@ class SfMPipeline:
                 if pycolmap_output.exists():
                     shutil.rmtree(pycolmap_output)
                 pycolmap_output.mkdir(parents=True, exist_ok=True)
+                mapping_options = pycolmap.IncrementalPipelineOptions()
+                mapping_options.num_threads = self.num_threads
+                mapping_options.mapper.num_threads = self.num_threads
                 maps = pycolmap.incremental_mapping(
                     database_path=self.database_path,
                     image_path=self.image_dir,
-                    output_path=pycolmap_output
+                    output_path=pycolmap_output,
+                    options=mapping_options,
                 )
                 if maps and len(maps) > 0:
                     best_key, self.best_model = max(

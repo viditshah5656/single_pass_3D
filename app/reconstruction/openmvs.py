@@ -80,7 +80,7 @@ class DenseReconstructor:
             detail = (exc.stderr or exc.stdout or str(exc))[-4000:]
             raise RuntimeError(f"OpenMVS {label} failed (exit {exc.returncode}):\n{detail}") from exc
 
-    def run_openmvs(self, sparse_dir: Optional[Path] = None, image_dir: Optional[Path] = None, use_cpu: bool = False, resolution_level: int = 1, max_resolution: int = 2400, number_views: int = 5, number_views_fuse: int = 2) -> Tuple[Path, Path, Path, Path]:
+    def run_openmvs(self, sparse_dir: Optional[Path] = None, image_dir: Optional[Path] = None, use_cpu: bool = False, resolution_level: int = 1, max_resolution: int = 2400, number_views: int = 5, number_views_fuse: int = 2, max_threads: int = 4) -> Tuple[Path, Path, Path, Path]:
         bins = {name: find_openmvs_binary(name) for name in ("InterfaceCOLMAP", "DensifyPointCloud", "ReconstructMesh", "TextureMesh")}
         if not all(bins.values()):
             missing = [name for name, path in bins.items() if not path]
@@ -120,7 +120,7 @@ class DenseReconstructor:
         if not scene.is_file() or scene.stat().st_size == 0:
             raise RuntimeError("InterfaceCOLMAP completed without a non-empty scene.mvs")
 
-        densify_cmd = [bins["DensifyPointCloud"], str(scene), "-o", str(dense_scene), "--resolution-level", str(max(0, resolution_level)), "--max-resolution", str(max_resolution), "--number-views", str(max(2, number_views)), "--number-views-fuse", str(max(2, number_views_fuse))]
+        densify_cmd = [bins["DensifyPointCloud"], str(scene), "-o", str(dense_scene), "--resolution-level", str(max(0, resolution_level)), "--max-resolution", str(max_resolution), "--number-views", str(max(2, number_views)), "--number-views-fuse", str(max(2, number_views_fuse)), "--max-threads", str(max(1, max_threads))]
         self._run(densify_cmd, self.dense_dir, "DensifyPointCloud")
         if not dense_scene.is_file() or dense_scene.stat().st_size == 0:
             raise RuntimeError("DensifyPointCloud returned successfully but scene_dense.mvs is missing/empty")
@@ -139,11 +139,11 @@ class DenseReconstructor:
         if dense_ply != self.dense_ply:
             shutil.copy2(dense_ply, self.dense_ply)
 
-        self._run([bins["ReconstructMesh"], str(dense_scene), "-o", str(mesh), "--export-type", "ply"], self.dense_dir, "ReconstructMesh")
+        self._run([bins["ReconstructMesh"], str(dense_scene), "-o", str(mesh), "--export-type", "ply", "--max-threads", str(max(1, max_threads))], self.dense_dir, "ReconstructMesh")
         if not mesh.is_file() or mesh.stat().st_size == 0:
             raise RuntimeError("ReconstructMesh did not create a non-empty mesh")
 
-        self._run([bins["TextureMesh"], "-i", str(dense_scene), "-m", str(mesh), "-o", str(textured_obj), "--export-type", "obj", "--global-seam-leveling", "1", "--local-seam-leveling", "1"], self.dense_dir, "TextureMesh")
+        self._run([bins["TextureMesh"], "-i", str(dense_scene), "-m", str(mesh), "-o", str(textured_obj), "--export-type", "obj", "--global-seam-leveling", "1", "--local-seam-leveling", "1", "--max-threads", str(max(1, max_threads))], self.dense_dir, "TextureMesh")
         if not textured_obj.is_file() or textured_obj.stat().st_size == 0:
             raise RuntimeError("TextureMesh did not create a non-empty OBJ")
         mtl = textured_obj.with_suffix(".mtl")
@@ -156,17 +156,18 @@ class DenseReconstructor:
             raise RuntimeError("TextureMesh did not create a texture atlas")
         return self.dense_ply, textured_obj, mtl, texture
 
-    def reconstruct(self, keyframes: List[Path], camera_poses: List[Dict[str, Any]], camera_calibration: Dict[str, Any], sparse_points: Optional[List[List[float]]] = None, sparse_dir: Optional[Path] = None, image_dir: Optional[Path] = None, dynamic_mask_paths: Optional[List[Path]] = None, voxel_size: float = 0.12, outlier_nb_neighbors: int = 20, outlier_std_ratio: float = 2.0) -> Dict[str, Any]:
+    def reconstruct(self, keyframes: List[Path], camera_poses: List[Dict[str, Any]], camera_calibration: Dict[str, Any], sparse_points: Optional[List[List[float]]] = None, sparse_dir: Optional[Path] = None, image_dir: Optional[Path] = None, dynamic_mask_paths: Optional[List[Path]] = None, voxel_size: float = 0.12, outlier_nb_neighbors: int = 20, outlier_std_ratio: float = 2.0, resolution_level: int = 1, max_resolution: int = 2400, number_views: int = 5, number_views_fuse: int = 2, max_threads: int = 4) -> Dict[str, Any]:
         if not self.is_openmvs_available():
             raise RuntimeError("Dense reconstruction backend unavailable: install InterfaceCOLMAP, DensifyPointCloud, ReconstructMesh, and TextureMesh. No synthetic dense fallback is executed.")
         ply_path, mesh_path, mtl_path, texture_path = self.run_openmvs(
             sparse_dir=sparse_dir,
             image_dir=image_dir,
             use_cpu=getattr(DEVICE, "type", "cpu") == "cpu",
-            resolution_level=1,
-            max_resolution=2400,
-            number_views=5,
-            number_views_fuse=2,
+            resolution_level=resolution_level,
+            max_resolution=max_resolution,
+            number_views=number_views,
+            number_views_fuse=number_views_fuse,
+            max_threads=max_threads,
         )
         pcd = o3d.io.read_point_cloud(str(ply_path))
         if len(pcd.points) == 0:

@@ -1,0 +1,19 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Studio · AeroSynth</title><link rel="stylesheet" href="/frontend/app.css"></head>
+<body data-page="studio"><div class="app-shell"><div id="shell"></div><main class="page">
+  <header class="page-title"><div><span class="eyebrow">Spatial workspace</span><h1 class="gradient-text">Reconstruction Studio</h1><p>Inspect real point geometry and calibrated project metrics without leaving the new workspace.</p></div><div class="hero-actions" style="margin:0"><a class="btn btn-secondary" href="/jobs">Job history</a><a class="btn btn-primary" href="/reconstruct">New reconstruction</a></div></header>
+  <section class="studio-layout">
+    <article class="glass viewport-card">
+      <div class="viewport-toolbar"><div><span class="pill"><span class="dot good"></span><span id="viewerState">Viewer ready</span></span><span class="pill" id="pointCount">0 points</span></div><div class="viewport-actions"><button class="btn btn-secondary" id="toggleSpin">Pause rotation</button><button class="btn btn-secondary" id="resetView">Reset view</button></div></div>
+      <canvas class="viewport-canvas" id="studioCanvas"></canvas>
+      <div class="viewport-empty" id="viewerEmpty"><div><span class="feature-icon">◇</span><h2>No completed geometry selected</h2><p class="muted">Choose a completed reconstruction or create a new flight project. The viewer only displays verified backend points.</p></div></div>
+      <div class="viewport-footer"><span class="pill">Drag to orbit · Wheel to zoom</span><span class="pill mono" id="viewerCoords">X · Y · Z</span></div>
+    </article>
+    <aside class="studio-sidebar">
+      <article class="card glass"><span class="eyebrow">Active project</span><div class="field"><select class="select" id="studioJob"><option value="">Loading projects…</option></select></div><p class="muted" id="projectMessage" style="margin-top:12px">Reading job storage.</p></article>
+      <article class="card glass"><span class="eyebrow">Geometry</span><h3>Model statistics</h3><div class="mini-stat"><span>Sparse points</span><strong id="statSparse">—</strong></div><div class="mini-stat"><span>Dense points</span><strong id="statDense">—</strong></div><div class="mini-stat"><span>Mesh vertices</span><strong id="statVertices">—</strong></div><div class="mini-stat"><span>Triangles</span><strong id="statTriangles">—</strong></div></article>
+      <article class="card glass"><span class="eyebrow">Calibration</span><h3>Survey metrics</h3><div class="mini-stat"><span>Reprojection</span><strong id="statReprojection">—</strong></div><div class="mini-stat"><span>Ground sampling</span><strong id="statGsd">—</strong></div><div class="mini-stat"><span>Coordinates</span><strong id="statCrs">Local metric</strong></div></article>
+    </aside>
+  </section>
+</main></div>
+<div class="modal-backdrop" id="newProjectModal"><div class="modal glass"><div class="modal-head"><div><span class="eyebrow">New project</span><h2>Start another reconstruction</h2></div><button class="btn btn-secondary icon-btn" data-modal-close>×</button></div><p class="muted">The guided flow validates your flight source and submits it to this studio.</p><a class="btn btn-primary" href="/reconstruct">Open guided setup</a></div></div>
+<script src="/frontend/app.js"></script><script src="/frontend/studio.js"></script></body></html>

@@ -49,3 +49,7 @@ data/input/*
 scratch/
 scratch_frame.jpg
 *.pt
+
+# Generated OpenMVS build trees
+third_party/openMVS-build/
+third_party/openMVS-build-v230/

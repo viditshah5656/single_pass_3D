@@ -18,6 +18,7 @@ sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
   libgomp1 \
   libomp-dev \
   libboost-all-dev \
+  libcgal-dev \
   libeigen3-dev \
   libopencv-dev \
   libnanoflann-dev
