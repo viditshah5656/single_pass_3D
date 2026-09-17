@@ -10,6 +10,8 @@ RUN rm -f /etc/apt/sources.list.d/yarn.list \
     /etc/apt/sources.list.d/yarnpkg.list.save \
     /etc/apt/sources.list.d/yarn.list.save || true
 
+# Native OpenMVS dependencies. Keep these in the image so a fresh Codespace is
+# reproducible and the OpenMVS build never falls into a dependency-install loop.
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         ffmpeg \
@@ -23,6 +25,9 @@ RUN apt-get update \
         libgomp1 \
         libomp-dev \
         libboost-all-dev \
+        libeigen3-dev \
+        libopencv-dev \
+        libnanoflann-dev \
     && rm -rf /var/lib/apt/lists/*
 
 RUN mkdir -p /opt/venv \
