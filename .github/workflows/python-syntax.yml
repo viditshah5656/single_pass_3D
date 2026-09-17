@@ -1,18 +1,25 @@
-name: Python syntax
+name: Cross-platform Python checks
 
 on:
   push:
-    branches: [main, reconstruction-v5]
+    branches: [main]
   pull_request:
-    branches: [main, reconstruction-v5]
+    branches: [main]
 
 jobs:
   compile:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ["3.11"]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: ${{ matrix.python }}
       - name: Compile Python sources
         run: python -m compileall -q app tests
+      - name: Run portable runtime tests
+        run: python -m unittest discover -s tests -p "test_platform.py"
