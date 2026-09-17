@@ -11,6 +11,6 @@ printf '\n== Platform diagnostics ==\n'
 python -m app.main doctor --json
 
 printf '\n== Unit tests ==\n'
-pytest -q
+python -m pytest -q
 
 printf '\nCodespace checks completed.\n'
