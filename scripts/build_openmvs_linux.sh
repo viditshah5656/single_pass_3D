@@ -4,22 +4,42 @@ set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
 OPENMVS_DIR="${OPENMVS_DIR:-third_party/openMVS}"
-BUILD_DIR="${OPENMVS_BUILD_DIR:-${OPENMVS_DIR}/build}"
+# IMPORTANT: OpenMVS itself contains tracked build/Utils.cmake. Never put the
+# CMake build tree inside the source tree or it can overwrite/delete that file.
+BUILD_DIR="${OPENMVS_BUILD_DIR:-third_party/openMVS-build}"
 INSTALL_DIR="${OPENMVS_INSTALL_DIR:-$PWD/.local/openmvs}"
 JOBS="${CMAKE_BUILD_PARALLEL_LEVEL:-$(nproc)}"
 
 mkdir -p third_party .local/bin
 
 if [[ ! -d "$OPENMVS_DIR/.git" ]]; then
+  rm -rf "$OPENMVS_DIR"
   git clone --recurse-submodules https://github.com/cdcseacave/openMVS.git "$OPENMVS_DIR"
 else
   git -C "$OPENMVS_DIR" submodule update --init --recursive
 fi
 
+# If an older run deleted the tracked source-side build/Utils.cmake, restore it.
+if [[ ! -f "$OPENMVS_DIR/build/Utils.cmake" ]]; then
+  git -C "$OPENMVS_DIR" restore --source=HEAD -- build/Utils.cmake build/Modules || true
+fi
+if [[ ! -f "$OPENMVS_DIR/build/Utils.cmake" ]]; then
+  echo "OpenMVS source tree is incomplete: build/Utils.cmake is missing." >&2
+  echo "Delete $OPENMVS_DIR and rerun this script." >&2
+  exit 1
+fi
+
+rm -rf "$BUILD_DIR"
 cmake -S "$OPENMVS_DIR" -B "$BUILD_DIR" -GNinja \
   -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_INSTALL_PREFIX="$INSTALL_DIR" \
-  -DOpenMVS_USE_CUDA=OFF
+  -DOpenMVS_USE_CUDA=OFF \
+  -DOpenMVS_BUILD_VIEWER=OFF \
+  -DOpenMVS_BUILD_TOOLS=ON \
+  -DOpenMVS_USE_PYTHON=OFF \
+  -DOpenMVS_USE_BREAKPAD=OFF \
+  -DOpenMVS_USE_SSE=ON \
+  -DCMAKE_DISABLE_FIND_PACKAGE_CUDA=TRUE
 
 cmake --build "$BUILD_DIR" --parallel "$JOBS"
 cmake --install "$BUILD_DIR"
