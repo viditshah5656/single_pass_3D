@@ -6,7 +6,7 @@ __pycache__/
 # C extensions
 *.so
 
-# Virtual environment
+# Virtual environments
 .venv/
 venv/
 ENV/
@@ -26,7 +26,7 @@ dist/
 *.swo
 .DS_Store
 
-# Native C++ Submodules & Cloned Third-Party repos
+# Native C++ / third-party source trees
 PoseLib/
 TinyEXIF/
 TinyNPY/
@@ -36,14 +36,15 @@ tinygltf/
 tinyply/
 vcglib/
 
-# Data, media uploads, and reconstruction outputs
+# Runtime data, media uploads, and reconstruction outputs
 data/uploads/*
 data/output/*
 data/workspace/*
+data/job_state/*
 data/input/*
 !data/**/.gitkeep
 
-# Logs & temp
+# Logs / temporary artifacts
 *.log
 scratch/
 scratch_frame.jpg
