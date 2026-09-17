@@ -22,8 +22,6 @@ sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
   libopencv-dev \
   libnanoflann-dev
 
-# /opt/venv is preferred because devcontainer.json puts it first on PATH.
-# Create it as root, then hand ownership to the Codespace user.
 if [[ ! -x /opt/venv/bin/python ]]; then
   sudo rm -rf /opt/venv
   sudo python -m venv --system-site-packages /opt/venv
@@ -32,9 +30,6 @@ sudo chown -R "$(id -u):$(id -g)" /opt/venv
 source /opt/venv/bin/activate
 
 python -m pip install --upgrade pip setuptools wheel
-
-# Codespaces are Linux CPU development environments. Install the CPU PyTorch
-# wheels explicitly; native CUDA/MPS validation happens on the target machines.
 python -m pip install --extra-index-url https://download.pytorch.org/whl/cpu \
   torch torchvision
 
@@ -47,13 +42,11 @@ filtered = [
     and not line.strip().startswith('torch==')
     and not line.strip().startswith('torchvision==')
 ]
-Path('/tmp/requirements-codespaces.txt').write_text('\\n'.join(filtered) + '\\n', encoding='utf-8')
+Path('/tmp/requirements-codespaces.txt').write_text('\n'.join(filtered) + '\n', encoding='utf-8')
 PY
 
 python -m pip install -r /tmp/requirements-codespaces.txt
-
 mkdir -p data/input data/uploads data/output data/workspace data/job_state .local/bin
-
 git config --local core.autocrlf input
 
 echo
