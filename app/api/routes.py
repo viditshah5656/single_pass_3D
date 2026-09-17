@@ -15,7 +15,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from app.config import DEVICE, PipelineConfig, find_colmap_binary, find_glomap_binary, logger
-from app.pipeline import ReconstructionPipeline
+from app.pipeline_runtime import ReconstructionPipeline
 
 ROOT = Path(__file__).resolve().parents[2]
 UPLOAD_ROOT = ROOT / "data" / "uploads"
@@ -25,18 +25,7 @@ for directory in (UPLOAD_ROOT, OUTPUT_ROOT, STATE_ROOT):
     directory.mkdir(parents=True, exist_ok=True)
 
 router = APIRouter(prefix="/api/v1", tags=["reconstruction"])
-STAGES = [
-    ("video_extraction", "Video ingestion & frame extraction"),
-    ("quality_filtering", "Frame quality filtering"),
-    ("keyframe_selection", "Keyframe selection"),
-    ("dynamic_masking", "Dynamic-object masking"),
-    ("sfm", "Structure from Motion"),
-    ("dense_reconstruction", "Dense multi-view stereo"),
-    ("meshing", "Surface meshing & texturing"),
-    ("georeferencing", "Georeferencing"),
-    ("analysis", "Metrology & semantic analysis"),
-    ("export_deliverables", "Deliverable export"),
-]
+STAGES = [("video_extraction", "Video ingestion & frame extraction"), ("quality_filtering", "Frame quality filtering"), ("keyframe_selection", "Keyframe selection"), ("dynamic_masking", "Dynamic-object masking"), ("sfm", "Structure from Motion"), ("dense_reconstruction", "Dense multi-view stereo"), ("meshing", "Surface meshing & texturing"), ("georeferencing", "Georeferencing"), ("analysis", "Metrology & semantic analysis"), ("export_deliverables", "Deliverable export")]
 STAGE_INDEX = {name: i + 1 for i, (name, _) in enumerate(STAGES)}
 
 
@@ -100,12 +89,7 @@ class ReconstructRequest(BaseModel):
 
 _VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v"}
 _TELEMETRY_EXTENSIONS = {".srt", ".gpx", ".csv"}
-_DELIVERABLES = {
-    "obj": "model.obj", "mtl": "model.mtl", "texture": "texture.jpg", "ply": "cloud.ply",
-    "las": "cloud.las", "glb": "model.glb", "gltf": "model.glb", "fbx": "model.fbx",
-    "orthophoto": "ortho.tif", "ortho": "ortho.tif", "geotiff": "ortho.tif", "dsm": "dsm.tif",
-    "report": "report.pdf", "pdf": "report.pdf", "manifest": "manifest.json",
-}
+_DELIVERABLES = {"obj": "model.obj", "mtl": "model.mtl", "texture": "texture.jpg", "ply": "cloud.ply", "las": "cloud.las", "glb": "model.glb", "gltf": "model.glb", "fbx": "model.fbx", "orthophoto": "ortho.tif", "ortho": "ortho.tif", "geotiff": "ortho.tif", "dsm": "dsm.tif", "report": "report.pdf", "pdf": "report.pdf", "manifest": "manifest.json"}
 _MIME = {"glb": "model/gltf-binary", "obj": "text/plain", "mtl": "text/plain", "ply": "application/octet-stream", "las": "application/octet-stream", "fbx": "application/octet-stream", "tif": "image/tiff", "pdf": "application/pdf", "json": "application/json", "jpg": "image/jpeg", "png": "image/png"}
 
 
