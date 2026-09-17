@@ -3,6 +3,9 @@
 This module deliberately has no synthetic stereo or sparse-point fallback. If the
 native MVS toolchain is unavailable or produces an invalid artifact, the job fails
 with a diagnostic instead of reporting a fake reconstruction.
+
+OpenMVS CLI binaries are mandatory for dense reconstruction; this backend never
+substitutes a synthetic or approximate dense reconstruction implementation.
 """
 from __future__ import annotations
 
@@ -125,8 +128,6 @@ class DenseReconstructor:
         dense_candidates = [self.dense_ply, self.dense_dir / "scene_dense.ply", self.dense_dir / "scene_dense.ply.bin"]
         dense_ply = _first_existing(dense_candidates)
         if dense_ply is None:
-            # OpenMVS installations differ in whether DensifyPointCloud writes a PLY.
-            # Ask OpenMVS to export it explicitly when supported.
             export_cmd = [bins["DensifyPointCloud"], str(dense_scene), "--export-type", "ply", "-o", str(self.dense_ply)]
             try:
                 self._run(export_cmd, self.dense_dir, "DensifyPointCloud PLY export")
