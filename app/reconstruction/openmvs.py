@@ -51,6 +51,38 @@ def _validate_dense_cloud(ply_path: Path, min_points: int = 1000) -> Dict[str, A
     return {"points": int(len(points)), "extent": extent.tolist(), "planarity": planarity}
 
 
+def _sanitize_openmvs_mesh(mesh_path: Path) -> None:
+    """Remove only clearly unsupported long-edge bridge triangles from the raw MVS mesh."""
+    mesh = o3d.io.read_triangle_mesh(str(mesh_path))
+    if len(mesh.triangles) < 10:
+        raise RuntimeError("OpenMVS produced an unusably small surface mesh.")
+    vertices = np.asarray(mesh.vertices)
+    faces = np.asarray(mesh.triangles)
+    tri = vertices[faces]
+    edge_lengths = np.concatenate((
+        np.linalg.norm(tri[:, 1] - tri[:, 0], axis=1),
+        np.linalg.norm(tri[:, 2] - tri[:, 1], axis=1),
+        np.linalg.norm(tri[:, 0] - tri[:, 2], axis=1),
+    ))
+    median_edge = float(np.median(edge_lengths)) if len(edge_lengths) else 0.0
+    if median_edge > 0:
+        edges = np.stack((
+            np.linalg.norm(tri[:, 1] - tri[:, 0], axis=1),
+            np.linalg.norm(tri[:, 2] - tri[:, 1], axis=1),
+            np.linalg.norm(tri[:, 0] - tri[:, 2], axis=1),
+        ), axis=1)
+        invalid = edges.max(axis=1) > median_edge * 8.0
+        if invalid.any() and int((~invalid).sum()) >= 10:
+            mesh.remove_triangles_by_mask(invalid)
+            mesh.remove_unreferenced_vertices()
+    mesh.remove_degenerate_triangles()
+    mesh.remove_duplicated_triangles()
+    if len(mesh.triangles) < 10:
+        raise RuntimeError("OpenMVS mesh became empty after unsupported-bridge filtering.")
+    o3d.io.write_triangle_mesh(str(mesh_path), mesh, write_ascii=False, compressed=False)
+    logger.info("OpenMVS mesh validation retained %s triangles.", f"{len(mesh.triangles):,}")
+
+
 def _model_dir(root: Path) -> Path:
     candidates = [root / "0", root]
     for candidate in candidates:
@@ -190,6 +222,7 @@ class DenseReconstructor:
         ], self.dense_dir, "ReconstructMesh")
         if not mesh.is_file() or mesh.stat().st_size == 0:
             raise RuntimeError("ReconstructMesh did not create a non-empty mesh")
+        _sanitize_openmvs_mesh(mesh)
 
         self._run([
             bins["TextureMesh"], "-i", str(dense_scene), "-m", str(mesh),
