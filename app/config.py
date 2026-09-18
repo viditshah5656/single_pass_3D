@@ -154,8 +154,8 @@ class QualityConfig:
 @dataclass
 class KeyframeConfig:
     min_gps_distance: float = 1.5
-    min_optical_flow: float = 12.0
-    max_frames: int = 180
+    min_optical_flow: float = 8.0
+    max_frames: int = 240
     min_time_gap_sec: float = 0.20
 
 
@@ -188,10 +188,10 @@ class ReconstructionConfig:
     voxel_size: float = 0.08
     outlier_nb_neighbors: int = 20
     outlier_std_ratio: float = 2.0
-    openmvs_resolution_level: int = 1
-    openmvs_max_resolution: int = 2560
-    openmvs_number_views: int = 5
-    openmvs_number_views_fuse: int = 2
+    openmvs_resolution_level: int = 0
+    openmvs_max_resolution: int = 4096
+    openmvs_number_views: int = 6
+    openmvs_number_views_fuse: int = 3
     openmvs_max_threads: int = 0
     allow_colmap_fallback: bool = True
 
