@@ -1,0 +1,49 @@
+name: Full reconstruction runtime
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "app/**"
+      - "tests/**"
+      - "scripts/**"
+      - ".devcontainer/**"
+      - "requirements.txt"
+      - ".github/workflows/full-runtime.yml"
+
+jobs:
+  linux-runtime:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends             ffmpeg build-essential cmake ninja-build pkg-config             libgl1 libegl1 libglib2.0-0 libgomp1 libomp-dev             libboost-all-dev libcgal-dev libeigen3-dev libopencv-dev             libnanoflann-dev
+
+      - name: Install Python dependencies
+        run: |
+          python3 -m venv .ci-venv
+          source .ci-venv/bin/activate
+          python -m pip install --upgrade pip setuptools wheel
+          python -m pip install --extra-index-url https://download.pytorch.org/whl/cpu torch torchvision
+          python - <<'PY'
+          from pathlib import Path
+          lines = Path("requirements.txt").read_text(encoding="utf-8").splitlines()
+          keep = [x for x in lines if x.strip() not in {"torch", "torchvision"} and not x.strip().startswith(("torch==", "torchvision=="))]
+          Path("/tmp/requirements-ci.txt").write_text("\n".join(keep) + "\n", encoding="utf-8")
+          PY
+          python -m pip install -r /tmp/requirements-ci.txt
+
+      - name: Build pinned OpenMVS
+        run: |
+          source .ci-venv/bin/activate
+          bash scripts/build_openmvs_linux.sh
+
+      - name: Validate full runtime
+        run: |
+          source .ci-venv/bin/activate
+          bash scripts/verify_full_runtime.sh
