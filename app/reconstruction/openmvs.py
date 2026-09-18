@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import open3d as o3d
+import numpy as np
 
 from app.config import DEVICE, find_binary, logger
 
@@ -29,6 +30,25 @@ def _first_existing(paths: list[Path]) -> Optional[Path]:
         if path.is_file() and path.stat().st_size > 0:
             return path
     return None
+
+
+def _validate_dense_cloud(ply_path: Path, min_points: int = 1000) -> Dict[str, Any]:
+    """Validate dense MVS geometry before allowing surface reconstruction."""
+    pcd = o3d.io.read_point_cloud(str(ply_path))
+    points = np.asarray(pcd.points, dtype=np.float64)
+    if len(points) < min_points:
+        raise RuntimeError(f"Dense MVS produced only {len(points):,} points; refusing to build a mesh from an insufficient cloud.")
+    if not np.isfinite(points).all():
+        raise RuntimeError("Dense MVS point cloud contains NaN/Inf coordinates.")
+    extent = np.ptp(points, axis=0)
+    if not np.all(np.isfinite(extent)) or float(np.max(extent)) <= 1e-6:
+        raise RuntimeError("Dense MVS point cloud has no measurable spatial extent.")
+    centered = points - np.mean(points, axis=0)
+    covariance = np.cov(centered, rowvar=False) if len(points) >= 3 else np.eye(3)
+    eigenvalues = np.sort(np.linalg.eigvalsh(covariance))[::-1]
+    planarity = float(eigenvalues[2] / max(eigenvalues[0], 1e-12))
+    logger.info("Dense MVS validation: %s points, extent=(%.3f, %.3f, %.3f), planarity=%.6f", f"{len(points):,}", extent[0], extent[1], extent[2], planarity)
+    return {"points": int(len(points)), "extent": extent.tolist(), "planarity": planarity}
 
 
 def _model_dir(root: Path) -> Path:
@@ -157,11 +177,15 @@ class DenseReconstructor:
         if dense_ply != self.dense_ply:
             shutil.copy2(dense_ply, self.dense_ply)
 
+        _validate_dense_cloud(dense_ply, min_points=1000)
+
         self._run([
             bins["ReconstructMesh"], str(dense_scene),
             "-o", str(mesh), "--export-type", "ply",
-            "--close-holes", "30", "--smooth", "2",
-            "--target-face-num", "250000",
+            # Only close tiny cracks; do not fabricate broad surfaces across
+            # regions where MVS has no observations.
+            "--close-holes", "2", "--smooth", "0",
+            "--target-face-num", "500000",
             "--max-threads", threads_arg, "--process-priority", "0"
         ], self.dense_dir, "ReconstructMesh")
         if not mesh.is_file() or mesh.stat().st_size == 0:
@@ -171,8 +195,8 @@ class DenseReconstructor:
             bins["TextureMesh"], "-i", str(dense_scene), "-m", str(mesh),
             "-o", str(textured_obj), "--export-type", "obj",
             "--global-seam-leveling", "1", "--local-seam-leveling", "1",
-            "--virtual-face-images", "3",
-            "--cost-smoothness-ratio", "0.5",
+            "--virtual-face-images", "1",
+            "--cost-smoothness-ratio", "0.25",
             "--patch-packing-heuristic", "3",
             "--max-texture-size", "4096",
             "--empty-color", "0",
