@@ -285,12 +285,12 @@ class MeshProcessor:
             
         tex_path = output_dir / "texture.jpg"
         if candidate_tex.is_file():
-            shutil.copy(candidate_tex, tex_path)
+            # OpenMVS already produces a calibrated texture atlas. Never apply
+            # arbitrary gain here: clipping the atlas destroys photographic RGB
+            # values and produces the saturated/black appearance in the viewer.
+            shutil.copy2(candidate_tex, tex_path)
             pil_tex = Image.open(str(tex_path)).convert("RGB")
-            tex_arr = np.array(pil_tex, dtype=np.float32)
-            tex_arr = np.clip(tex_arr * 3.5, 0, 255).astype(np.uint8)
-            pil_tex = Image.fromarray(tex_arr)
-            pil_tex.save(str(tex_path), quality=95)
+            pil_tex.save(str(tex_path), quality=95, subsampling=0)
         else:
             pil_tex = Image.fromarray(texture_img).convert("RGB")
             pil_tex.save(str(tex_path), quality=95)
