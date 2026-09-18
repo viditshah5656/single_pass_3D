@@ -120,14 +120,28 @@ python scripts/smoke_api.py
 
 Codespaces forwards port `8000`, so the same FastAPI process serves the local control room at `/` and the API at `/api/v1/*`.
 
-### Optional native OpenMVS build
+### Native OpenMVS build
 
-A fresh Codespace does not compile OpenMVS automatically. For a Linux CPU dense-MVS environment:
+A fresh Codespace now builds the pinned OpenMVS native backend during post-create, so the dense pipeline is ready instead of silently stopping at sparse SfM. The four required tools are installed under `.local/bin`:
+
+```text
+InterfaceCOLMAP
+DensifyPointCloud
+ReconstructMesh
+TextureMesh
+```
+
+The build is also safe to repeat:
 
 ```bash
 bash scripts/build_openmvs_linux.sh
-python -m app.main doctor --json
+python -m app.main doctor --strict --json
+bash scripts/verify_full_runtime.sh
 ```
+
+If you intentionally need a Python/UI-only Codespace, set `OPENMVS_SKIP_BUILD=1` before running the post-create setup. That mode is not a full dense-reconstruction environment.
+
+The repository also has a GitHub Actions `Full reconstruction runtime` workflow that builds the same pinned OpenMVS toolchain and runs the full runtime checks on Linux.
 
 See [docs/CODESPACES.md](docs/CODESPACES.md) for the complete sequence and the distinction between Codespaces, M4/MPS, and NVIDIA/CUDA validation.
 
