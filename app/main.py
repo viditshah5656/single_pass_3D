@@ -2,15 +2,19 @@
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 
+import mimetypes
 import uvicorn
+
+mimetypes.add_type("image/webp", ".webp")
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.api.routes import router
-from app.config import PipelineConfig, logger
+from app.config import PipelineConfig, logger, SYSTEM_CPU_CORES
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -94,6 +98,7 @@ def run_cli(args: argparse.Namespace) -> int:
         skip_georeferencing=args.skip_georeferencing,
         skip_analysis=args.skip_analysis,
     )
+    config.reconstruction.openmvs_max_threads = args.cpu_threads
     config.video.target_fps = args.target_fps
     config.video.max_frames = args.max_frames
     config.sfm.mapper_backend = args.mapper_backend
@@ -120,9 +125,14 @@ def build_parser() -> argparse.ArgumentParser:
     run = subparsers.add_parser("run", help="Run a reconstruction directly")
     run.add_argument("input_video", help="Path to an aerial drone video")
     run.add_argument("--telemetry-path", default=None)
-    run.add_argument("--mapper-backend", choices=["glomap", "pycolmap"], default="glomap")
-    run.add_argument("--compute-backend", choices=["auto", "cuda", "mps", "cpu"], default="auto")
-    run.add_argument("--cpu-threads", type=int, default=4)
+    run.add_argument("--mapper-backend", choices=["glomap", "pycolmap"], default="pycolmap")
+    try:
+        import torch
+        default_backend = "cuda" if torch.cuda.is_available() else "auto"
+    except Exception:
+        default_backend = "auto"
+    run.add_argument("--compute-backend", choices=["auto", "cuda", "mps", "cpu"], default=default_backend)
+    run.add_argument("--cpu-threads", type=int, default=SYSTEM_CPU_CORES)
     run.add_argument("--target-fps", type=float, default=3.0)
     run.add_argument("--max-frames", type=int, default=450)
     run.add_argument("--workspace-dir", default="data/workspace")

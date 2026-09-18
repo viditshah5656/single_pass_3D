@@ -45,12 +45,14 @@ class DynamicObjectMasker:
 
         h, w = img.shape[:2]
         mask = np.zeros((h, w), dtype=np.uint8)
+        is_cuda = "cuda" in self.device_name.lower()
         results = self.yolo(
             img,
             verbose=False,
             conf=self.config.confidence,
             classes=self.config.target_classes,
             device=self.device_name,
+            half=is_cuda,
         )
 
         boxes = []

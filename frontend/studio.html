@@ -1,10 +1,10 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Studio · AeroSynth</title><link rel="stylesheet" href="/frontend/app.css"></head>
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Studio · AeroSynth</title><link rel="stylesheet" href="/frontend/app.css"><script type="module" src="https://ajax.googleapis.com/ajax/libs/model-viewer/3.5.0/model-viewer.min.js"></script></head>
 <body data-page="studio"><div class="app-shell"><div id="shell"></div><main class="page">
   <header class="page-title"><div><span class="eyebrow">Spatial workspace</span><h1 class="gradient-text">Reconstruction Studio</h1><p>Inspect real point geometry and calibrated project metrics without leaving the new workspace.</p></div><div class="hero-actions" style="margin:0"><a class="btn btn-secondary" href="/jobs">Job history</a><a class="btn btn-primary" href="/reconstruct">New reconstruction</a></div></header>
   <section class="studio-layout">
     <article class="glass viewport-card">
       <div class="viewport-toolbar"><div><span class="pill"><span class="dot good"></span><span id="viewerState">Viewer ready</span></span><span class="pill" id="pointCount">0 points</span></div><div class="viewport-actions"><button class="btn btn-secondary" id="toggleSpin">Pause rotation</button><button class="btn btn-secondary" id="resetView">Reset view</button></div></div>
-      <canvas class="viewport-canvas" id="studioCanvas"></canvas>
+      <model-viewer class="viewport-canvas" id="studioCanvas" style="width:100%;height:100%;display:none;background:transparent;" camera-controls auto-rotate shadow-intensity="0.6" exposure="1.5" environment-image="neutral" tone-mapping="neutral"></model-viewer>
       <div class="viewport-empty" id="viewerEmpty"><div><span class="feature-icon">◇</span><h2>No completed geometry selected</h2><p class="muted">Choose a completed reconstruction or create a new flight project. The viewer only displays verified backend points.</p></div></div>
       <div class="viewport-footer"><span class="pill">Drag to orbit · Wheel to zoom</span><span class="pill mono" id="viewerCoords">X · Y · Z</span></div>
     </article>

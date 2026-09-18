@@ -30,6 +30,10 @@ def get_device(requested: str | None = None):
     except Exception:
         torch = None
     requested = (requested or os.getenv("AEROSYNTH_COMPUTE_BACKEND", "auto")).lower()
+    
+    if torch is not None and torch.cuda.is_available():
+        requested = "cuda"
+
     if platform.system() == "Darwin":
         os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 
@@ -76,10 +80,28 @@ def get_device(requested: str | None = None):
     return device
 
 
-# A lightweight default for modules imported by the web layer. The real torch
-# device is resolved when a reconstruction starts, avoiding seconds of startup
-# latency just to render the website.
-DEVICE = os.getenv("AEROSYNTH_COMPUTE_BACKEND", "cpu").lower()
+def _detect_default_device() -> str:
+    env = os.getenv("AEROSYNTH_COMPUTE_BACKEND")
+    if env:
+        return env.lower()
+    try:
+        import torch
+        if torch.cuda.is_available():
+            try:
+                torch.cuda.set_device(0)
+                torch.backends.cudnn.benchmark = True
+                os.environ.setdefault("CUDA_VISIBLE_DEVICES", "0")
+            except Exception:
+                pass
+            return "cuda"
+        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            return "mps"
+    except Exception:
+        pass
+    return "cpu"
+
+
+DEVICE = _detect_default_device()
 
 
 def find_binary(name: str, extra_roots: tuple[Path, ...] = ()) -> Optional[str]:
@@ -157,14 +179,17 @@ class SfMConfig:
     min_sparse_points: int = 100
 
 
+SYSTEM_CPU_CORES = max(1, os.cpu_count() or 12)
+
+
 @dataclass
 class ReconstructionConfig:
     method: str = "openmvs"
-    voxel_size: float = 0.12
+    voxel_size: float = 0.08
     outlier_nb_neighbors: int = 20
     outlier_std_ratio: float = 2.0
     openmvs_resolution_level: int = 1
-    openmvs_max_resolution: int = 2400
+    openmvs_max_resolution: int = 2560
     openmvs_number_views: int = 5
     openmvs_number_views_fuse: int = 2
     openmvs_max_threads: int = 0
@@ -174,10 +199,10 @@ class ReconstructionConfig:
 @dataclass
 class MeshConfig:
     method: str = "openmvs"
-    poisson_depth: int = 9
+    poisson_depth: int = 10
     density_trim_quantile: float = 0.05
-    texture_resolution: int = 2048
-    target_face_count: int = 250_000
+    texture_resolution: int = 4096
+    target_face_count: int = 500_000
 
 
 @dataclass
@@ -194,8 +219,8 @@ class PipelineConfig:
     telemetry_path: Optional[str] = None
     output_dir: str = "data/output"
     workspace_dir: str = "data/workspace"
-    compute_backend: str = "auto"
-    cpu_threads: int = 4
+    compute_backend: str = field(default_factory=lambda: "cuda" if _detect_default_device() == "cuda" else "auto")
+    cpu_threads: int = SYSTEM_CPU_CORES
     video: VideoConfig = field(default_factory=VideoConfig)
     quality: QualityConfig = field(default_factory=QualityConfig)
     keyframe: KeyframeConfig = field(default_factory=KeyframeConfig)

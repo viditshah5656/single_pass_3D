@@ -238,7 +238,7 @@ class ReconstructionPipeline:
     def _stage_dense_reconstruction(self):
         """Stage 6: Real dense multi-view stereo reconstruction via OpenMVS."""
         logger.info("Stage 6/10: Dense depth reconstruction via OpenMVS Multi-View Stereo")
-        dense_engine = DenseReconstructor(self.workspace)
+        dense_engine = DenseReconstructor(self.workspace, device=self.device)
         sparse_dir = getattr(self.sfm_pipeline, "actual_sparse_dir", self.workspace / "sparse")
         image_dir = getattr(self.sfm_pipeline, "image_dir", self.workspace / "images")
         
@@ -392,7 +392,7 @@ class ReconstructionPipeline:
         # Subsample points for WebGL viewport (up to 150,000 points)
         sample_stride = max(1, len(pts_arr) // 150000)
         indices = np.arange(0, len(pts_arr), sample_stride)
-        sampled_pts = np.round(pts_arr[indices], 3)
+        sampled_pts = np.round(pts_arr[indices], 6)
         sampled_cols = cols_arr[indices]
         cls_arr = np.asarray(classification, dtype=int)
         sampled_cls = cls_arr[indices].reshape(-1, 1) if len(cls_arr) >= len(pts_arr) else np.full((len(indices), 1), 2, dtype=int)
@@ -468,7 +468,10 @@ class ReconstructionPipeline:
             self.mesh, 
             self.mesh_uvs, 
             self.texture_img, 
-            self.output_dir
+            self.output_dir,
+            openmvs_obj_path=getattr(self, "openmvs_mesh_path", None),
+            openmvs_mtl_path=getattr(self, "openmvs_mtl_path", None),
+            openmvs_texture_path=getattr(self, "openmvs_texture_path", None),
         )
 
         # 4. Export real Stanford .PLY file

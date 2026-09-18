@@ -78,15 +78,18 @@ class JobStatus(BaseModel):
     mapper_backend: Optional[str] = None
 
 
+SYSTEM_CPU_CORES = max(1, os.cpu_count() or 12)
+
+
 class ReconstructRequest(BaseModel):
     skip_dynamic_masking: bool = False
     skip_depth_estimation: bool = False
     skip_georeferencing: bool = False
     skip_analysis: bool = False
-    target_fps: float = Field(default=1.5, gt=0, le=10)
-    mapper_backend: str = Field(default="glomap", pattern="^(glomap|pycolmap)$")
-    processing_profile: str = Field(default="fast", pattern="^(fast|balanced|quality)$")
-    cpu_threads: int = Field(default=4, ge=1, le=64)
+    target_fps: float = Field(default=2.5, gt=0, le=10)
+    mapper_backend: str = Field(default="pycolmap", pattern="^(glomap|pycolmap)$")
+    processing_profile: str = Field(default="balanced", pattern="^(fast|balanced|quality)$")
+    cpu_threads: int = Field(default=SYSTEM_CPU_CORES, ge=1, le=64)
     telemetry_filename: Optional[str] = None
 
 _VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v"}
@@ -109,14 +112,22 @@ def _run_pipeline_task(job_id: str, config: PipelineConfig) -> None:
             return
         _running_jobs.add(job_id)
     try:
-        _set_job(job_id, status="queued", stage="queued", stage_index=0, progress=0.0, message="Waiting for the CPU reconstruction slot")
+        _set_job(job_id, status="queued", stage="queued", stage_index=0, progress=0.0, message="Waiting for reconstruction worker slot")
         with _pipeline_slots:
             thread_count = str(config.cpu_threads)
             for variable in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "NUMEXPR_NUM_THREADS"):
                 os.environ[variable] = thread_count
             os.environ["OMP_DYNAMIC"] = "FALSE"
+            import torch
+            if torch.cuda.is_available():
+                os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+                torch.cuda.set_device(0)
+                gpu_name = torch.cuda.get_device_name(0)
+                device_desc = f"Compulsory GPU ({gpu_name}) + {thread_count} CPU threads"
+            else:
+                device_desc = f"{thread_count} CPU threads"
             from app.pipeline_runtime import ReconstructionPipeline
-            _set_job(job_id, status="running", stage="initializing", stage_index=0, progress=0.0, message=f"Initializing reconstruction engine with {thread_count} CPU threads", started_at=_now(), mapper_backend=config.sfm.mapper_backend)
+            _set_job(job_id, status="running", stage="initializing", stage_index=0, progress=0.0, message=f"Initializing reconstruction engine on {device_desc}", started_at=_now(), mapper_backend=config.sfm.mapper_backend)
             pipeline = ReconstructionPipeline(config)
             for stage_name, _ in STAGES:
                 method = getattr(pipeline, f"_stage_{stage_name}", None)
@@ -243,18 +254,18 @@ async def start_reconstruction(job_id: str, background_tasks: BackgroundTasks, o
     config.reconstruction.openmvs_max_threads = opts.cpu_threads
     profiles = {
         "fast": {
-            "max_frames": 60, "max_keyframes": 28, "resolution_level": 3,
-            "max_resolution": 1080, "number_views": 2, "poisson_depth": 8,
-            "texture_resolution": 1024,
-        },
-        "balanced": {
-            "max_frames": 220, "max_keyframes": 100, "resolution_level": 1,
-            "max_resolution": 2000, "number_views": 4, "poisson_depth": 9,
+            "max_frames": 150, "max_keyframes": 60, "resolution_level": 2,
+            "max_resolution": 1920, "number_views": 3, "poisson_depth": 9,
             "texture_resolution": 2048,
         },
+        "balanced": {
+            "max_frames": 350, "max_keyframes": 120, "resolution_level": 1,
+            "max_resolution": 2560, "number_views": 4, "poisson_depth": 10,
+            "texture_resolution": 4096,
+        },
         "quality": {
-            "max_frames": 450, "max_keyframes": 180, "resolution_level": 0,
-            "max_resolution": 2800, "number_views": 5, "poisson_depth": 10,
+            "max_frames": 500, "max_keyframes": 180, "resolution_level": 1,
+            "max_resolution": 2560, "number_views": 5, "poisson_depth": 10,
             "texture_resolution": 4096,
         },
     }

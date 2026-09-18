@@ -54,7 +54,7 @@ def _probe_binary(path: str | None) -> dict[str, object]:
             return {
                 "found": True,
                 "path": path,
-                "executable": result.returncode == 0 or bool(result.stdout) or bool(result.stderr),
+                "executable": result.returncode in (0, 1) or bool(result.stdout) or bool(result.stderr),
                 "returncode": result.returncode,
             }
         except Exception as exc:

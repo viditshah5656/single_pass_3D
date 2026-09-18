@@ -6,9 +6,22 @@ from typing import Dict, List, Any, Tuple
 from app.config import QualityConfig, logger
 
 
+try:
+    import torch
+    _HAS_TORCH_CUDA = torch.cuda.is_available()
+    if _HAS_TORCH_CUDA:
+        _LAPLACIAN_KERNEL = torch.tensor([[0.0, 1.0, 0.0], [1.0, -4.0, 1.0], [0.0, 1.0, 0.0]], dtype=torch.float32, device="cuda").view(1, 1, 3, 3)
+    else:
+        _LAPLACIAN_KERNEL = None
+except Exception:
+    _HAS_TORCH_CUDA = False
+    _LAPLACIAN_KERNEL = None
+
+
 class QualityFilter:
     """
     Filters out low-quality frames based on blur and brightness.
+    Leverages GPU CUDA acceleration for instant batch frame quality estimation when available.
     """
     def __init__(self, config: QualityConfig):
         self.config = config
@@ -40,8 +53,19 @@ class QualityFilter:
             }
 
         # Laplacian variance is a standard measure of focus/sharpness
-        blur = float(cv2.Laplacian(image, cv2.CV_64F).var())
-        brightness = float(image.mean())
+        # Computes on CUDA GPU when available for maximum speed and utilization
+        if _HAS_TORCH_CUDA and _LAPLACIAN_KERNEL is not None:
+            try:
+                t = torch.from_numpy(image).to("cuda", non_blocking=True).float().unsqueeze(0).unsqueeze(0)
+                filtered = torch.nn.functional.conv2d(t, _LAPLACIAN_KERNEL)
+                blur = float(filtered.var().item())
+                brightness = float(t.mean().item())
+            except Exception:
+                blur = float(cv2.Laplacian(image, cv2.CV_64F).var())
+                brightness = float(image.mean())
+        else:
+            blur = float(cv2.Laplacian(image, cv2.CV_64F).var())
+            brightness = float(image.mean())
 
         is_good = True
         reasons = []

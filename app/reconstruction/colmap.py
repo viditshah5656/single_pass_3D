@@ -17,7 +17,7 @@ class SfMPipeline:
     SIFT feature extraction, dynamic mask exclusion, sequential matching,
     and incremental bundle adjustment.
     """
-    def __init__(self, workspace_dir: Union[str, Path], num_threads: int = 4, max_keypoints: int = 4096, match_window: int = 8):
+    def __init__(self, workspace_dir: Union[str, Path], num_threads: Optional[int] = None, max_keypoints: int = 4096, match_window: int = 8):
         self.workspace_dir = Path(workspace_dir)
         self.database_path = self.workspace_dir / "database.db"
         self.image_dir = self.workspace_dir / "images"
@@ -27,7 +27,8 @@ class SfMPipeline:
         self.image_dir.mkdir(parents=True, exist_ok=True)
         self.sparse_dir.mkdir(parents=True, exist_ok=True)
         self.best_model: Optional[pycolmap.Reconstruction] = None
-        self.num_threads = max(1, int(num_threads))
+        system_cores = max(1, os.cpu_count() or 12)
+        self.num_threads = max(1, int(num_threads)) if num_threads is not None else system_cores
         self.max_keypoints = max(512, int(max_keypoints))
         self.match_window = max(2, int(match_window))
 
@@ -83,6 +84,13 @@ class SfMPipeline:
         extraction_options = pycolmap.FeatureExtractionOptions()
         extraction_options.num_threads = self.num_threads
         extraction_options.sift.max_num_features = self.max_keypoints
+        try:
+            import torch
+            if torch.cuda.is_available():
+                extraction_options.use_gpu = True
+                extraction_options.gpu_index = "0"
+        except Exception:
+            pass
         
         pycolmap.extract_features(
             database_path=self.database_path,
@@ -99,6 +107,13 @@ class SfMPipeline:
         logger.info(f"Matching features using {method} matching...")
         matching_options = pycolmap.FeatureMatchingOptions()
         matching_options.num_threads = self.num_threads
+        try:
+            import torch
+            if torch.cuda.is_available():
+                matching_options.use_gpu = True
+                matching_options.gpu_index = "0"
+        except Exception:
+            pass
         if method == "exhaustive":
             pycolmap.match_exhaustive(self.database_path, matching_options=matching_options)
         else:

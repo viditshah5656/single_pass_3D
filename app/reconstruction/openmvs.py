@@ -40,11 +40,12 @@ def _model_dir(root: Path) -> Path:
 
 
 class DenseReconstructor:
-    def __init__(self, workspace_dir: Union[str, Path]):
+    def __init__(self, workspace_dir: Union[str, Path], device: Optional[Any] = None):
         self.workspace_dir = Path(workspace_dir).resolve()
         self.dense_dir = self.workspace_dir / "dense"
         self.dense_dir.mkdir(parents=True, exist_ok=True)
         self.dense_ply = self.dense_dir / "scene_dense.ply"
+        self.device = device
 
     def is_openmvs_available(self) -> bool:
         return all(find_openmvs_binary(name) for name in ("InterfaceCOLMAP", "DensifyPointCloud", "ReconstructMesh", "TextureMesh"))
@@ -80,7 +81,7 @@ class DenseReconstructor:
             detail = (exc.stderr or exc.stdout or str(exc))[-4000:]
             raise RuntimeError(f"OpenMVS {label} failed (exit {exc.returncode}):\n{detail}") from exc
 
-    def run_openmvs(self, sparse_dir: Optional[Path] = None, image_dir: Optional[Path] = None, use_cpu: bool = False, resolution_level: int = 1, max_resolution: int = 2400, number_views: int = 5, number_views_fuse: int = 2, max_threads: int = 4) -> Tuple[Path, Path, Path, Path]:
+    def run_openmvs(self, sparse_dir: Optional[Path] = None, image_dir: Optional[Path] = None, use_cpu: bool = False, resolution_level: int = 1, max_resolution: int = 2560, number_views: int = 5, number_views_fuse: int = 2, max_threads: int = 0) -> Tuple[Path, Path, Path, Path]:
         bins = {name: find_openmvs_binary(name) for name in ("InterfaceCOLMAP", "DensifyPointCloud", "ReconstructMesh", "TextureMesh")}
         if not all(bins.values()):
             missing = [name for name, path in bins.items() if not path]
@@ -116,11 +117,28 @@ class DenseReconstructor:
             for path in self.dense_dir.glob(pattern):
                 path.unlink(missing_ok=True)
 
-        self._run([bins["InterfaceCOLMAP"], "-i", str(interface_root), "-o", str(scene), "--image-folder", str(staged_images)], self.dense_dir, "InterfaceCOLMAP")
+        # 0 in OpenMVS instructs it to utilize all available CPU cores
+        threads_arg = str(max_threads) if max_threads >= 0 else "0"
+
+        self._run([bins["InterfaceCOLMAP"], "-i", str(interface_root), "-o", str(scene), "--image-folder", str(staged_images), "--max-threads", threads_arg, "--process-priority", "0"], self.dense_dir, "InterfaceCOLMAP")
         if not scene.is_file() or scene.stat().st_size == 0:
             raise RuntimeError("InterfaceCOLMAP completed without a non-empty scene.mvs")
 
-        densify_cmd = [bins["DensifyPointCloud"], str(scene), "-o", str(dense_scene), "--resolution-level", str(max(0, resolution_level)), "--max-resolution", str(max_resolution), "--number-views", str(max(2, number_views)), "--number-views-fuse", str(max(2, number_views_fuse)), "--max-threads", str(max(1, max_threads))]
+        densify_cmd = [
+            bins["DensifyPointCloud"], str(scene),
+            "-o", str(dense_scene),
+            "--resolution-level", str(max(0, resolution_level)),
+            "--max-resolution", str(max_resolution),
+            "--number-views", str(max(2, number_views)),
+            "--number-views-fuse", str(max(2, number_views_fuse)),
+            "--estimate-colors", "2",
+            "--estimate-normals", "2",
+            "--sub-resolution-levels", "2",
+            "--geometric-iters", "2",
+            "--iters", "3",
+            "--max-threads", threads_arg,
+            "--process-priority", "0",
+        ]
         self._run(densify_cmd, self.dense_dir, "DensifyPointCloud")
         if not dense_scene.is_file() or dense_scene.stat().st_size == 0:
             raise RuntimeError("DensifyPointCloud returned successfully but scene_dense.mvs is missing/empty")
@@ -128,7 +146,7 @@ class DenseReconstructor:
         dense_candidates = [self.dense_ply, self.dense_dir / "scene_dense.ply", self.dense_dir / "scene_dense.ply.bin"]
         dense_ply = _first_existing(dense_candidates)
         if dense_ply is None:
-            export_cmd = [bins["DensifyPointCloud"], str(dense_scene), "--export-type", "ply", "-o", str(self.dense_ply)]
+            export_cmd = [bins["DensifyPointCloud"], str(dense_scene), "--export-type", "ply", "-o", str(self.dense_ply), "--max-threads", threads_arg, "--process-priority", "0"]
             try:
                 self._run(export_cmd, self.dense_dir, "DensifyPointCloud PLY export")
             except RuntimeError:
@@ -139,11 +157,27 @@ class DenseReconstructor:
         if dense_ply != self.dense_ply:
             shutil.copy2(dense_ply, self.dense_ply)
 
-        self._run([bins["ReconstructMesh"], str(dense_scene), "-o", str(mesh), "--export-type", "ply", "--max-threads", str(max(1, max_threads))], self.dense_dir, "ReconstructMesh")
+        self._run([
+            bins["ReconstructMesh"], str(dense_scene),
+            "-o", str(mesh), "--export-type", "ply",
+            "--close-holes", "30", "--smooth", "2",
+            "--target-face-num", "250000",
+            "--max-threads", threads_arg, "--process-priority", "0"
+        ], self.dense_dir, "ReconstructMesh")
         if not mesh.is_file() or mesh.stat().st_size == 0:
             raise RuntimeError("ReconstructMesh did not create a non-empty mesh")
 
-        self._run([bins["TextureMesh"], "-i", str(dense_scene), "-m", str(mesh), "-o", str(textured_obj), "--export-type", "obj", "--global-seam-leveling", "1", "--local-seam-leveling", "1", "--max-threads", str(max(1, max_threads))], self.dense_dir, "TextureMesh")
+        self._run([
+            bins["TextureMesh"], "-i", str(dense_scene), "-m", str(mesh),
+            "-o", str(textured_obj), "--export-type", "obj",
+            "--global-seam-leveling", "1", "--local-seam-leveling", "1",
+            "--virtual-face-images", "3",
+            "--cost-smoothness-ratio", "0.5",
+            "--patch-packing-heuristic", "3",
+            "--max-texture-size", "4096",
+            "--empty-color", "0",
+            "--max-threads", threads_arg, "--process-priority", "0"
+        ], self.dense_dir, "TextureMesh")
         if not textured_obj.is_file() or textured_obj.stat().st_size == 0:
             raise RuntimeError("TextureMesh did not create a non-empty OBJ")
         mtl = textured_obj.with_suffix(".mtl")
@@ -156,13 +190,14 @@ class DenseReconstructor:
             raise RuntimeError("TextureMesh did not create a texture atlas")
         return self.dense_ply, textured_obj, mtl, texture
 
-    def reconstruct(self, keyframes: List[Path], camera_poses: List[Dict[str, Any]], camera_calibration: Dict[str, Any], sparse_points: Optional[List[List[float]]] = None, sparse_dir: Optional[Path] = None, image_dir: Optional[Path] = None, dynamic_mask_paths: Optional[List[Path]] = None, voxel_size: float = 0.12, outlier_nb_neighbors: int = 20, outlier_std_ratio: float = 2.0, resolution_level: int = 1, max_resolution: int = 2400, number_views: int = 5, number_views_fuse: int = 2, max_threads: int = 4) -> Dict[str, Any]:
+    def reconstruct(self, keyframes: List[Path], camera_poses: List[Dict[str, Any]], camera_calibration: Dict[str, Any], sparse_points: Optional[List[List[float]]] = None, sparse_dir: Optional[Path] = None, image_dir: Optional[Path] = None, dynamic_mask_paths: Optional[List[Path]] = None, voxel_size: float = 0.08, outlier_nb_neighbors: int = 20, outlier_std_ratio: float = 2.0, resolution_level: int = 1, max_resolution: int = 2560, number_views: int = 5, number_views_fuse: int = 2, max_threads: int = 0) -> Dict[str, Any]:
         if not self.is_openmvs_available():
             raise RuntimeError("Dense reconstruction backend unavailable: install InterfaceCOLMAP, DensifyPointCloud, ReconstructMesh, and TextureMesh. No synthetic dense fallback is executed.")
+        device_type = getattr(self.device, "type", "cpu") if self.device is not None else getattr(DEVICE, "type", "cpu")
         ply_path, mesh_path, mtl_path, texture_path = self.run_openmvs(
             sparse_dir=sparse_dir,
             image_dir=image_dir,
-            use_cpu=getattr(DEVICE, "type", "cpu") == "cpu",
+            use_cpu=(device_type == "cpu"),
             resolution_level=resolution_level,
             max_resolution=max_resolution,
             number_views=number_views,
@@ -173,7 +208,13 @@ class DenseReconstructor:
         if len(pcd.points) == 0:
             raise RuntimeError(f"OpenMVS returned an empty point cloud: {ply_path}")
         if voxel_size > 0:
-            pcd = pcd.voxel_down_sample(voxel_size)
+            import numpy as np
+            points = np.asarray(pcd.points)
+            if len(points) > 0:
+                extent = np.max(points, axis=0) - np.min(points, axis=0)
+                max_extent = np.max(extent)
+                effective_voxel_size = min(voxel_size, max_extent / 800.0)
+                pcd = pcd.voxel_down_sample(effective_voxel_size)
         if len(pcd.points) >= max(20, outlier_nb_neighbors):
             pcd, _ = pcd.remove_statistical_outlier(nb_neighbors=outlier_nb_neighbors, std_ratio=outlier_std_ratio)
         if len(pcd.points) == 0:

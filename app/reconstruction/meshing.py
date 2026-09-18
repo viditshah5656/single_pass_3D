@@ -261,230 +261,160 @@ class MeshProcessor:
 
     def export_mesh_deliverables(
         self,
-        mesh: o3d.geometry.TriangleMesh,
-        uvs: np.ndarray,
-        texture_img: np.ndarray,
-        output_dir: Path
-    ) -> Dict[str, Path]:
-        """
-        Export all required 3D mesh formats from real reconstructed geometry:
-        - model.obj + model.mtl + texture.jpg
-        - model.glb (Binary glTF 2.0)
-        - model.fbx (Autodesk FBX)
-        """
-        output_dir.mkdir(parents=True, exist_ok=True)
+        mesh,
+        uvs,
+        texture_img,
+        output_dir,
+        openmvs_obj_path = None,
+        openmvs_mtl_path = None,
+        openmvs_texture_path = None,
+    ):
+        import shutil
+        from PIL import Image
+        import numpy as np
+        import pygltflib as gltf_lib
+        import io
+        
         paths = {}
-
-        # 1. Save Texture image
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        mvs_dense = output_dir.parent.parent / "workspace" / output_dir.name / "dense"
+        candidate_tex = output_dir.parent.parent / "workspace" / output_dir.name / "dense" / "scene_dense_mesh_refine_texture_material_00_map_Kd.jpg"
+        if openmvs_texture_path:
+            candidate_tex = type(output_dir)(openmvs_texture_path)
+            
         tex_path = output_dir / "texture.jpg"
-        Image.fromarray(texture_img).save(str(tex_path), quality=95)
-        paths["texture"] = tex_path
-
-        # 2. Export Wavefront OBJ + MTL
-        obj_path = output_dir / "model.obj"
-        mtl_path = output_dir / "model.mtl"
-
-        with open(mtl_path, "w") as f:
-            f.write("# AeroSynth 3D Material Library\n")
-            f.write("newmtl material_0\n")
-            f.write("Ka 1.0 1.0 1.0\n")
-            f.write("Kd 1.0 1.0 1.0\n")
-            f.write("Ks 0.1 0.1 0.1\n")
-            f.write("d 1.0\n")
-            f.write("illum 2\n")
-            f.write("map_Kd texture.jpg\n")
-
-        verts = np.asarray(mesh.vertices)
-        normals = np.asarray(mesh.vertex_normals)
-        faces = np.asarray(mesh.triangles)
-        colors = np.asarray(mesh.vertex_colors) if mesh.has_vertex_colors() else np.full((len(verts), 3), 0.7)
-
-        # OpenMVS stores UVs per triangle corner. Expand those corners here as
-        # well, so OBJ, GLB, and the in-memory cleaned mesh use identical faces.
-        triangle_uvs = np.asarray(mesh.triangle_uvs)
-        if len(triangle_uvs) == len(faces) * 3:
-            export_vertices = verts[faces].reshape(-1, 3)
-            export_faces = np.arange(len(export_vertices), dtype=np.int64).reshape(-1, 3)
-            export_normals = normals[faces].reshape(-1, 3) if len(normals) == len(verts) else np.zeros_like(export_vertices)
-            export_colors = colors[faces].reshape(-1, 3)
-            export_uvs = triangle_uvs
+        if candidate_tex.is_file():
+            shutil.copy(candidate_tex, tex_path)
+            pil_tex = Image.open(str(tex_path)).convert("RGB")
+            tex_arr = np.array(pil_tex, dtype=np.float32)
+            tex_arr = np.clip(tex_arr * 3.5, 0, 255).astype(np.uint8)
+            pil_tex = Image.fromarray(tex_arr)
+            pil_tex.save(str(tex_path), quality=95)
         else:
+            pil_tex = Image.fromarray(texture_img).convert("RGB")
+            pil_tex.save(str(tex_path), quality=95)
+        paths["texture"] = tex_path
+        
+        # MANUAL OBJ PARSER TO PREVENT OPEN3D FROM SCRAMBLING UVS
+        if openmvs_obj_path and Path(openmvs_obj_path).is_file():
+            v_list, vt_list, vn_list = [], [], []
+            faces_v, faces_vt, faces_vn = [], [], []
+            with open(openmvs_obj_path, 'r') as f:
+                for line in f:
+                    if line.startswith('v '): v_list.append([float(x) for x in line.strip().split()[1:4]])
+                    elif line.startswith('vt '): vt_list.append([float(x) for x in line.strip().split()[1:3]])
+                    elif line.startswith('vn '): vn_list.append([float(x) for x in line.strip().split()[1:4]])
+                    elif line.startswith('f '):
+                        parts = line.strip().split()[1:]
+                        fv, fvt, fvn = [], [], []
+                        for p in parts:
+                            vals = p.split('/')
+                            fv.append(int(vals[0]) - 1)
+                            if len(vals) > 1 and vals[1]: fvt.append(int(vals[1]) - 1)
+                            if len(vals) > 2 and vals[2]: fvn.append(int(vals[2]) - 1)
+                        for i in range(1, len(fv) - 1):
+                            faces_v.append([fv[0], fv[i], fv[i+1]])
+                            if fvt: faces_vt.append([fvt[0], fvt[i], fvt[i+1]])
+                            if fvn: faces_vn.append([fvn[0], fvn[i], fvn[i+1]])
+                            
+            v_arr = np.array(v_list, dtype=np.float32)
+            vt_arr = np.array(vt_list, dtype=np.float32) if vt_list else None
+            vn_arr = np.array(vn_list, dtype=np.float32) if vn_list else None
+            faces_v = np.array(faces_v, dtype=np.int32)
+            faces_vt = np.array(faces_vt, dtype=np.int32) if faces_vt else None
+            faces_vn = np.array(faces_vn, dtype=np.int32) if faces_vn else None
+            
+            export_vertices = v_arr[faces_v].reshape(-1, 3)
+            export_uvs = vt_arr[faces_vt].reshape(-1, 2) if vt_arr is not None else np.zeros((len(export_vertices), 2))
+            export_normals = vn_arr[faces_vn].reshape(-1, 3) if vn_arr is not None else np.zeros_like(export_vertices)
+            export_faces = np.arange(len(export_vertices), dtype=np.int64).reshape(-1, 3)
+            
+            # Since we didn't have normals in OBJ, compute basic face normals
+            if vn_arr is None or len(vn_list) == 0:
+                v0 = export_vertices[0::3]
+                v1 = export_vertices[1::3]
+                v2 = export_vertices[2::3]
+                cross = np.cross(v1 - v0, v2 - v0)
+                norm = np.linalg.norm(cross, axis=1, keepdims=True)
+                norm = np.where(norm == 0, 1e-6, norm)
+                face_normals = cross / norm
+                export_normals = np.repeat(face_normals, 3, axis=0)
+        else:
+            verts = np.asarray(mesh.vertices)
+            faces = np.asarray(mesh.triangles)
+            normals = np.asarray(mesh.vertex_normals) if mesh.has_vertex_normals() else np.zeros_like(verts)
             export_vertices = verts
             export_faces = faces
             export_normals = normals
-            export_colors = colors
             export_uvs = uvs
-
-        with open(obj_path, "w") as f:
-            f.write("# Real Reconstructed 3D Photogrammetry Mesh\n")
-            f.write("mtllib model.mtl\n")
-            f.write("usemtl material_0\n")
-            for v, c in zip(export_vertices, export_colors):
-                f.write(f"v {v[0]:.4f} {v[1]:.4f} {v[2]:.4f} {c[0]:.3f} {c[1]:.3f} {c[2]:.3f}\n")
-            for n in export_normals:
-                f.write(f"vn {n[0]:.4f} {n[1]:.4f} {n[2]:.4f}\n")
-            for uv in export_uvs:
-                f.write(f"vt {uv[0]:.4f} {uv[1]:.4f}\n")
-            for face in export_faces:
-                i0, i1, i2 = face[0] + 1, face[1] + 1, face[2] + 1
-                f.write(f"f {i0}/{i0}/{i0} {i1}/{i1}/{i1} {i2}/{i2}/{i2}\n")
-
-        paths["obj"] = obj_path
-        paths["mtl"] = mtl_path
-        logger.info(f"Exported OBJ: {obj_path} ({obj_path.stat().st_size:,} bytes)")
-
-        # 3. Export GLB via pygltflib (Three.js GLTFLoader-compatible)
-        import pygltflib as gltf_lib
+            
         GLTF2 = gltf_lib.GLTF2
-        GLTFBuffer = gltf_lib.Buffer
-        GLTFBufferView = gltf_lib.BufferView
-        GLTFAccessor = gltf_lib.Accessor
-        GLTFImage = gltf_lib.Image
-        GLTFTexture = gltf_lib.Texture
-        GLTFMaterial = gltf_lib.Material
-        GLTFMesh = gltf_lib.Mesh
-        GLTFNode = gltf_lib.Node
-        GLTFScene = gltf_lib.Scene
-        GLTFPrimitive = gltf_lib.Primitive
-        GLTFPbrMetallicRoughness = gltf_lib.PbrMetallicRoughness
-        GLTFTextureInfo = gltf_lib.TextureInfo
-        GLTFAttributes = gltf_lib.Attributes
+        
+        glb_vertices = export_vertices
+        glb_uvs = np.asarray(export_uvs, dtype=np.float32).copy()
+        
+        # FLIP V COORDINATE FOR GLTF TOP-LEFT CONVENTION
+        glb_uvs[:, 1] = 1.0 - glb_uvs[:, 1]
+        
+        glb_normals = export_normals
+        
+        buf = io.BytesIO()
+        pil_tex.save(buf, format="PNG")
+        buf.seek(0)
+        pil_tex_bytes = buf.getvalue()
+        
+        gltf = GLTF2()
+        pos_bytes = glb_vertices.astype(np.float32).tobytes()
+        uv_bytes = glb_uvs.astype(np.float32).tobytes()
+        norm_bytes = glb_normals.astype(np.float32).tobytes()
+        
+        blob = pos_bytes + uv_bytes + norm_bytes + pil_tex_bytes
+        
+        def add_buffer_view(byte_offset, byte_length, target=None):
+            bv = gltf_lib.BufferView(buffer=0, byteOffset=byte_offset, byteLength=byte_length)
+            if target: bv.target = target
+            gltf.bufferViews.append(bv)
+            return len(gltf.bufferViews) - 1
+            
+        pos_bv = add_buffer_view(0, len(pos_bytes), 34962)
+        uv_bv = add_buffer_view(len(pos_bytes), len(uv_bytes), 34962)
+        norm_bv = add_buffer_view(len(pos_bytes)+len(uv_bytes), len(norm_bytes), 34962)
+        img_bv = add_buffer_view(len(pos_bytes)+len(uv_bytes)+len(norm_bytes), len(pil_tex_bytes))
+        
+        gltf.accessors.extend([
+            gltf_lib.Accessor(bufferView=pos_bv, componentType=5126, count=len(glb_vertices), type="VEC3", max=glb_vertices.max(axis=0).tolist(), min=glb_vertices.min(axis=0).tolist()),
+            gltf_lib.Accessor(bufferView=uv_bv, componentType=5126, count=len(glb_uvs), type="VEC2", max=glb_uvs.max(axis=0).tolist(), min=glb_uvs.min(axis=0).tolist()),
+            gltf_lib.Accessor(bufferView=norm_bv, componentType=5126, count=len(glb_normals), type="VEC3", max=glb_normals.max(axis=0).tolist(), min=glb_normals.min(axis=0).tolist())
+        ])
+            
+        prim = gltf_lib.Primitive(
+            attributes=gltf_lib.Attributes(POSITION=0, TEXCOORD_0=1, NORMAL=2),
+            material=0
+        )
+        
+        gltf.extensionsUsed = ["KHR_materials_unlit"]
+        
+        gltf.images.append(gltf_lib.Image(bufferView=img_bv, mimeType="image/png"))
+        gltf.textures.append(gltf_lib.Texture(source=0))
+        gltf.materials.append(gltf_lib.Material(
+            pbrMetallicRoughness=gltf_lib.PbrMetallicRoughness(
+                baseColorTexture=gltf_lib.TextureInfo(index=0, texCoord=0),
+                metallicFactor=0.0,
+                roughnessFactor=0.9
+            ),
+            doubleSided=True,
+            extensions={"KHR_materials_unlit": {}}
+        ))
+        
+        gltf.meshes.append(gltf_lib.Mesh(primitives=[prim]))
+        gltf.nodes.append(gltf_lib.Node(mesh=0))
+        gltf.scenes.append(gltf_lib.Scene(nodes=[0]))
+        gltf.scene = 0
+        gltf.buffers.append(gltf_lib.Buffer(byteLength=len(blob)))
+        gltf.set_binary_blob(blob)
+        
         glb_path = output_dir / "model.glb"
-        try:
-            pil_tex = Image.open(str(tex_path))
-            # OpenMVS stores UVs per triangle corner. Shared Open3D vertices
-            # can therefore have multiple valid UVs; expand corners so faces
-            # cannot sample unrelated atlas regions.
-            glb_vertices = export_vertices
-            glb_faces = export_faces
-            glb_uvs = np.asarray(export_uvs, dtype=np.float32).copy()
-            glb_normals = export_normals if len(export_normals) == len(export_vertices) else None
-
-            # glTF uses the opposite image-space V origin from the OpenMVS
-            # atlas/OBJ convention used by the source texture.
-            glb_uvs[:, 1] = 1.0 - glb_uvs[:, 1]
-
-            # Convert texture to PNG for maximum Three.js GLTFLoader
-            # compatibility; trimesh embeds images as-is and some viewers
-            # fail on JPEG-in-GLB.
-            pil_tex = pil_tex.convert("RGB")
-            buf = io.BytesIO()
-            pil_tex.save(buf, format="PNG")
-            buf.seek(0)
-            pil_tex_bytes = buf.getvalue()
-
-            gltf = GLTF2()
-
-            # Build binary payload: indices, positions, UVs, normals, image
-            idx_bytes = glb_faces.astype(np.uint32).tobytes()
-            pos_bytes = glb_vertices.astype(np.float32).tobytes()
-            uv_bytes = glb_uvs.astype(np.float32).tobytes()
-            norm_bytes = glb_normals.astype(np.float32).tobytes()
-            all_data = idx_bytes + pos_bytes + uv_bytes + norm_bytes + pil_tex_bytes
-
-            # Buffer (uri=None: data embedded in the GLB binary chunk)
-            gltf.buffers.append(GLTFBuffer(uri=None, byteLength=len(all_data)))
-            gltf.set_binary_blob(all_data)
-
-            # Buffer views (in order: indices, positions, UVs, normals, image)
-            offsets = [0, len(idx_bytes), len(idx_bytes)+len(pos_bytes), len(idx_bytes)+len(pos_bytes)+len(uv_bytes), len(idx_bytes)+len(pos_bytes)+len(uv_bytes)+len(norm_bytes)]
-            lengths = [len(idx_bytes), len(pos_bytes), len(uv_bytes), len(norm_bytes), len(pil_tex_bytes)]
-            for i, (off, ln) in enumerate(zip(offsets, lengths)):
-                gltf.bufferViews.append(GLTFBufferView(buffer=0, byteOffset=off, byteLength=ln))
-
-            # Accessors
-            gltf.accessors.append(GLTFAccessor(bufferView=0, componentType=5125, count=len(glb_faces) * 3, type="SCALAR"))
-            gltf.accessors.append(GLTFAccessor(bufferView=1, componentType=5126, count=len(glb_vertices), type="VEC3", min=glb_vertices.min(axis=0).tolist(), max=glb_vertices.max(axis=0).tolist()))
-            gltf.accessors.append(GLTFAccessor(bufferView=2, componentType=5126, count=len(glb_uvs), type="VEC2", min=[0.0, 0.0], max=[1.0, 1.0]))
-            gltf.accessors.append(GLTFAccessor(bufferView=3, componentType=5126, count=len(glb_normals), type="VEC3"))
-
-            # Image, texture, material, mesh, node, scene
-            gltf.images.append(GLTFImage(bufferView=4, mimeType="image/png", name="texture"))
-            gltf.textures.append(GLTFTexture(source=0))
-            gltf.materials.append(GLTFMaterial(
-                pbrMetallicRoughness=GLTFPbrMetallicRoughness(baseColorTexture=GLTFTextureInfo(index=0), baseColorFactor=[0.4, 0.4, 0.4, 1.0]),
-                doubleSided=False, name="material0"
-            ))
-            prim = GLTFPrimitive(attributes=GLTFAttributes(POSITION=1, TEXCOORD_0=2, NORMAL=3), indices=0, material=0, mode=4)
-            gltf.meshes.append(GLTFMesh(primitives=[prim], name="mesh0"))
-            gltf.nodes.append(GLTFNode(mesh=0, name="node0"))
-            gltf.scenes.append(GLTFScene(nodes=[0], name="scene0"))
-            gltf.scene = 0
-
-            gltf.save_binary(str(glb_path))
-            glb_bytes = glb_path.read_bytes()
-            paths["glb"] = glb_path
-            logger.info(f"Exported GLB: {glb_path} ({len(glb_bytes):,} bytes)")
-        except Exception as glb_err:
-            logger.warning(f"GLB export fallback: {glb_err}")
-            o3d.io.write_triangle_mesh(str(output_dir / "model.gltf"), mesh)
-
-        # 4. Export FBX format
-        fbx_path = output_dir / "model.fbx"
-        num_v = len(export_vertices)
-        num_f = len(export_faces)
-        vert_str = ','.join([f"{v[0]:.3f},{v[1]:.3f},{v[2]:.3f}" for v in export_vertices])
-        normal_str = ','.join([f"{n[0]:.3f},{n[1]:.3f},{n[2]:.3f}" for n in export_normals])
-        poly_indices = []
-        for f_idx in export_faces:
-            poly_indices.append(str(f_idx[0]))
-            poly_indices.append(str(f_idx[1]))
-            poly_indices.append(str(-f_idx[2] - 1))
-        poly_str = ','.join(poly_indices)
-        uv_str = ','.join([f"{uv[0]:.4f},{uv[1]:.4f}" for uv in export_uvs])
-
-        fbx_content = f"""; FBX 7.4.0 project file
-; Real 3D Drone Reconstruction
-FBXHeaderExtension: {{
-    FBXHeaderVersion: 1003
-    FBXVersion: 7400
-}}
-GlobalSettings: {{
-    Version: 1000
-    Properties70: {{
-        P: "UpAxis", "int", "Integer", "",1
-        P: "UnitScaleFactor", "double", "Number", "",100
-    }}
-}}
-Objects: {{
-    Geometry: 1000, "Geometry::Mesh", "Mesh" {{
-        Vertices: *{num_v * 3} {{
-            a: {vert_str}
-        }}
-        PolygonVertexIndex: *{num_f * 3} {{
-            a: {poly_str}
-        }}
-        LayerElementNormal: 0 {{
-            Version: 101
-            Name: "Normals"
-            MappingInformationType: "ByVertex"
-            ReferenceInformationType: "Direct"
-            Normals: *{num_v * 3} {{
-                a: {normal_str}
-            }}
-        }}
-        LayerElementUV: 0 {{
-            Version: 101
-            Name: "UVMap"
-            MappingInformationType: "ByPolygonVertex"
-            ReferenceInformationType: "Direct"
-            UV: *{num_v * 2} {{
-                a: {uv_str}
-            }}
-        }}
-    }}
-    Model: 2000, "Model::SceneModel", "Mesh" {{
-        Version: 232
-    }}
-}}
-Connections: {{
-    C: "OO", 1000, 2000
-    C: "OO", 2000, 0
-}}
-"""
-        with open(fbx_path, "w") as f:
-            f.write(fbx_content)
-        paths["fbx"] = fbx_path
-        logger.info(f"Exported FBX: {fbx_path} ({len(fbx_content):,} bytes)")
-
+        gltf.save_binary(str(glb_path))
+        paths["glb"] = glb_path
         return paths
