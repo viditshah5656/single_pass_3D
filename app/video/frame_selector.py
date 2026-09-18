@@ -15,25 +15,31 @@ class KeyframeSelector:
         self.config = config
 
     def compute_optical_flow(self, prev_img: np.ndarray, curr_img: np.ndarray) -> float:
-        """
-        Compute the average optical flow magnitude between two grayscale images.
-        """
-        # Downscale for high-speed optical flow calculation
+        """Return robust median static-feature displacement in source pixels."""
+        prev_small, curr_small = prev_img, curr_img
         h, w = prev_img.shape[:2]
-        if w > 480:
-            scale = 480.0 / w
-            prev_small = cv2.resize(prev_img, (480, int(h * scale)))
-            curr_small = cv2.resize(curr_img, (480, int(h * scale)))
-        else:
-            prev_small, curr_small = prev_img, curr_img
-
-        flow = cv2.calcOpticalFlowFarneback(
-            prev_small, curr_small, None,
-            pyr_scale=0.5, levels=2, winsize=11,
-            iterations=2, poly_n=5, poly_sigma=1.1, flags=0
-        )
-        mag, _ = cv2.cartToPolar(flow[..., 0], flow[..., 1])
-        return float(np.mean(mag))
+        scale = 1.0
+        if w > 800:
+            scale = 800.0 / w
+            size = (800, max(1, int(h * scale)))
+            prev_small = cv2.resize(prev_img, size, interpolation=cv2.INTER_AREA)
+            curr_small = cv2.resize(curr_img, size, interpolation=cv2.INTER_AREA)
+        pts0 = cv2.goodFeaturesToTrack(prev_small, maxCorners=800, qualityLevel=0.01, minDistance=8, blockSize=7)
+        if pts0 is None or len(pts0) < 30:
+            return 0.0
+        pts1, status, _ = cv2.calcOpticalFlowPyrLK(prev_small, curr_small, pts0, None, winSize=(21,21), maxLevel=3, criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 30, 0.01))
+        if pts1 is None or status is None:
+            return 0.0
+        good = status.reshape(-1).astype(bool)
+        if good.sum() < 20:
+            return 0.0
+        p0 = pts0.reshape(-1,2)[good]
+        p1 = pts1.reshape(-1,2)[good]
+        displacement = np.linalg.norm(p1-p0, axis=1)
+        displacement = displacement[np.isfinite(displacement)]
+        if len(displacement) < 20:
+            return 0.0
+        return float(np.median(displacement) / max(scale, 1e-6))
 
     def select_keyframes(
         self, 
@@ -89,7 +95,9 @@ class KeyframeSelector:
                 if dist >= self.config.min_gps_distance:
                     baseline_sufficient = True
             
-            # 2. Fallback to optical flow if GPS not available or distance is small
+            # 2. Robust static-feature displacement when GPS is unavailable. Median
+            # tracked motion is less sensitive to moving objects and camera rotation
+            # than mean dense optical flow.
             if not baseline_sufficient:
                 curr_img = cv2.imread(str(curr_path), cv2.IMREAD_GRAYSCALE)
                 if curr_img is not None and prev_img is not None:
